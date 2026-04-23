@@ -1,0 +1,37 @@
+# API Keys and Config - NEVER commit
+config.json
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.codex
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+/data/
+/logs/
+*.db
+
+# Test and scratch directories (not committed)
+scratch/
+data_test/

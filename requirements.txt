@@ -1,0 +1,6 @@
+requests
+textual
+python-dotenv
+groq
+joblib
+scikit-learn

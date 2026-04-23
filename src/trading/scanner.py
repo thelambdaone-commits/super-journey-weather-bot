@@ -1,0 +1,323 @@
+"""
+Market scanning and processing logic.
+"""
+from __future__ import annotations
+import time
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, List
+
+from ..weather.apis import get_forecasts
+from ..weather.locations import LOCATIONS, MONTHS
+from ..weather.math import bucket_prob, in_bucket
+from .polymarket import get_polymarket_event, get_outcomes, hours_to_resolution, check_market_resolved
+from .trade_builder import build_trade_payload
+from ..strategy.filters import should_skip_outcome
+from ..strategy.sizing import size_position
+from .helpers import (
+    log_paper_trade, build_signal_marker, should_emit_marker,
+    format_ai_note, format_ml_note, get_ai_trade_context
+)
+from .types import ScanResult
+
+if TYPE_CHECKING:
+    from .engine import TradingEngine
+
+from ..strategy.signal_quality import Signal
+
+class MarketScanner:
+    """Core logic for scanning markets and identifying opportunities."""
+    
+    def __init__(self, engine: TradingEngine):
+        self.engine = engine
+
+    def scan_and_update(self) -> ScanResult:
+        """Run a full scan cycle."""
+        now = datetime.now(timezone.utc)
+        state = self.engine.storage.load_state()
+        balance = state.balance
+        result = ScanResult()
+        pending_signals: list[dict] = []
+
+        for city_slug, loc in LOCATIONS.items():
+            self.engine.emit(f" -> {loc.name}...")
+
+            try:
+                dates = [(now + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(4)]
+                snapshots = get_forecasts(city_slug, dates)
+                time.sleep(0.3)
+            except Exception as exc:
+                self.engine.emit(f"skipped ({exc})")
+                continue
+
+            for i, date_str in enumerate(dates):
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                event = get_polymarket_event(city_slug, MONTHS[dt.month - 1], dt.day, dt.year)
+                if not event:
+                    continue
+
+                end_date = event.get("endDate", "")
+                hours = hours_to_resolution(end_date) if end_date else 0
+                horizon = f"D+{i}"
+
+                market = self.engine.storage.load_market(city_slug, date_str)
+                if market is None:
+                    if hours < self.engine.config.min_hours or hours > self.engine.config.max_hours:
+                        continue
+                    from ..storage import Market
+                    market = Market(
+                        city=city_slug,
+                        city_name=loc.name,
+                        date=date_str,
+                        unit=loc.unit,
+                        station=loc.station,
+                        event_end_date=end_date,
+                        hours_at_discovery=round(hours, 1),
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    )
+
+                if market.status == "resolved":
+                    continue
+
+                outcomes = get_outcomes(event)
+                market.all_outcomes = outcomes
+
+                snap = snapshots.get(date_str, {})
+                base_features = self.engine.feature_engine.build(loc, snap, outcomes, hours)
+                
+                # Update snapshots
+                market.forecast_snapshots.append({
+                    "ts": snap.get("ts"),
+                    "horizon": horizon,
+                    "hours_left": round(hours, 1),
+                    "source": snap.get("best_source"),
+                    "temp": snap.get("best"),
+                    "ecmwf": snap.get("ecmwf"),
+                    "hrrr": snap.get("hrrr"),
+                    "metar": snap.get("metar"),
+                })
+
+                top = max(outcomes, key=lambda outcome: outcome["price"]) if outcomes else None
+                unit_sym = "°F" if loc.unit == "F" else "°C"
+                market.market_snapshots.append({
+                    "ts": snap.get("ts"),
+                    "top_bucket": f"{top['range'][0]}-{top['range'][1]}{unit_sym}" if top else None,
+                    "top_price": top["price"] if top else None,
+                })
+
+                forecast_temp = snap.get("best")
+                best_source = snap.get("best_source")
+
+                # Handle open positions (stops/trails)
+                if market.position and market.position.get("status") == "open":
+                    pos = market.position
+                    current_price = None
+                    for outcome in outcomes:
+                        if outcome["market_id"] == pos["market_id"]:
+                            current_price = outcome.get("bid", outcome["price"])
+                            break
+
+                    if current_price is not None:
+                        entry = pos["entry_price"]
+                        stop = pos.get("stop_price", entry * 0.80)
+                        if current_price >= entry * 1.20 and stop < entry:
+                            pos["stop_price"] = entry
+                        if current_price <= stop:
+                            pnl = round((current_price - entry) * pos["shares"], 2)
+                            balance += pos["cost"] + pnl
+                            pos.update({
+                                "closed_at": datetime.now(timezone.utc).isoformat(),
+                                "close_reason": "stop",
+                                "exit_price": current_price,
+                                "pnl": pnl,
+                                "status": "closed"
+                            })
+                            result.closed += 1
+                            self.engine.emit(f"[STOP/TRAIL] {loc.name} {date_str} | {pnl:+.2f}")
+
+                # Look for new opportunities
+                if not market.position and forecast_temp is not None and hours >= self.engine.config.min_hours:
+                    opportunity = self.find_opportunity(city_slug, loc, snap, outcomes, hours, base_features, balance)
+                    if opportunity:
+                        outcome, probability_estimate, edge_estimate, features = opportunity
+                        kelly, size = size_position(
+                            probability_estimate.probability,
+                            outcome["ask"],
+                            balance,
+                            self.engine.config.kelly_fraction,
+                            self.engine.config.max_bet,
+                        )
+
+                        if size >= 0.50:
+                            signal = self.build_signal(outcome, probability_estimate, edge_estimate, features, kelly, size, forecast_temp, best_source)
+                            ai_review, flagged = get_ai_trade_context(loc.name, snap, signal)
+                            if ai_review:
+                                signal["ai"] = ai_review
+                            
+                            if flagged:
+                                self.record_decision(market, loc, snap, features, signal, probability_estimate, edge_estimate, "SKIP", "ai_flagged", horizon, outcome)
+                                self.engine.emit(f"[AI-SKIP] {loc.name} {date_str} | anomalie signalée")
+                            else:
+                                # Portfolio Risk Check
+                                open_markets = self.engine.storage.load_all_markets()
+                                risk_check = self.engine.risk_manager.check_new_trade(city_slug, signal["cost"], open_markets)
+                                
+                                if not risk_check["allowed"]:
+                                    self.record_decision(market, loc, snap, features, signal, probability_estimate, edge_estimate, "SKIP", risk_check["reason"], horizon, outcome)
+                                    self.engine.emit(f"[RISK-SKIP] {loc.name} {date_str} | {risk_check['reason']}")
+                                else:
+                                    self.record_decision(market, loc, snap, features, signal, probability_estimate, edge_estimate, "BUY", "edge_positive", horizon, outcome)
+                                    note = format_ai_note(signal.get("ai")) + format_ml_note(signal.get("ml"))
+                                    
+                                    if self.engine.modes.live_trade:
+                                        balance -= signal["cost"]
+                                        market.position = signal
+                                        state.total_trades += 1
+                                        result.new_trades += 1
+                                        self.engine.feedback.notify_trade_open(loc.name, date_str, f"{signal['bucket_low']}-{signal['bucket_high']}{unit_sym}", signal["entry_price"], signal["ev"], signal["cost"], signal["forecast_src"], note)
+                                        self.engine.emit(f"[BUY] {loc.name} | ${signal['entry_price']:.3f} | EV {signal['ev']:+.2f}")
+
+                                if self.engine.modes.paper_mode and should_emit_marker(market.paper_state, signal):
+                                    log_paper_trade(loc.name, date_str, horizon, signal)
+                                    self.engine.paper_account.record_trade(signal["cost"])
+                                    market.paper_position = signal
+                                    market.paper_state = build_signal_marker(signal)
+
+                                if self.engine.modes.signal_mode and should_emit_marker(market.signal_state, signal):
+                                    # Use the new Signal Quality Layer
+                                    sql_signal = Signal.from_dict(loc.name, signal)
+                                    quality_result = self.engine.signal_quality.validate(sql_signal)
+                                    
+                                    if quality_result["accepted"]:
+                                        # Map quality result to filter_decision for backward compatibility
+                                        # We use a simple dict for legacy reasons in the pipeline
+                                        filter_decision = type('Decision', (), {
+                                            "allowed": True,
+                                            "priority": "NORMAL", # Could be dynamic based on quality
+                                            "emoji": "🌡️",
+                                            "signal_type": "edge-opportunity"
+                                        })
+                                        
+                                        trade_context = build_trade_payload(
+                                            city=loc.name, date_str=date_str, horizon=horizon,
+                                            bucket=f"{signal['bucket_low']}-{signal['bucket_high']}{unit_sym}",
+                                            unit=unit_sym, signal=signal, question=signal["question"],
+                                            event_slug=event.get("slug"), priority=filter_decision.priority, emoji=filter_decision.emoji,
+                                        )
+                                        pending_signals.append({
+                                            "market": market, "loc": loc, "date_str": date_str, "horizon": horizon,
+                                            "unit_sym": unit_sym, "signal": signal, "filter_decision": filter_decision,
+                                            "trade_context": trade_context, "note": note,
+                                        })
+
+                self.engine.storage.save_market(market)
+                time.sleep(0.1)
+
+        # Process and send top signals
+        if self.engine.modes.signal_mode and pending_signals:
+            self.engine.process_pending_signals(pending_signals)
+
+        # Resolve markets
+        self.resolve_pending_markets(balance, state, result)
+        
+        if self.engine.modes.live_trade or result.closed:
+            state.balance = round(balance, 2)
+            state.peak_balance = max(state.peak_balance, balance)
+            self.engine.storage.save_state(state)
+
+        return result
+
+    def find_opportunity(self, city_slug, loc, snap, outcomes, hours, base_features, balance):
+        """Find the best tradeable outcome in a market."""
+        forecast_temp = snap.get("best")
+        best_source = snap.get("best_source")
+        
+        for candidate in outcomes:
+            t_low, t_high = candidate["range"]
+            estimate = self.engine.probability_engine.estimate_bucket(
+                city_slug, best_source, forecast_temp, loc.unit, t_low, t_high
+            )
+            if not in_bucket(estimate.adjusted_temp, t_low, t_high):
+                continue
+            
+            candidate_features = dict(base_features)
+            candidate_features.update(self.engine.feature_engine.build(loc, snap, outcomes, hours, candidate))
+            current_edge = self.engine.edge_engine.compute(estimate.probability, candidate["ask"], candidate_features)
+            
+            if should_skip_outcome(self.engine.config, candidate, candidate_features, current_edge.adjusted_ev):
+                continue
+            
+            return candidate, estimate, current_edge, candidate_features
+        return None
+
+    def build_signal(self, outcome, estimate, edge, features, kelly, size, forecast_temp, best_source):
+        """Build a signal dictionary."""
+        return {
+            "market_id": outcome["market_id"],
+            "question": outcome["question"],
+            "bucket_low": outcome["range"][0],
+            "bucket_high": outcome["range"][1],
+            "entry_price": outcome["ask"],
+            "bid_at_entry": outcome["bid"],
+            "spread": outcome["spread"],
+            "shares": round(size / outcome["ask"], 2),
+            "cost": size,
+            "raw_prob": round(bucket_prob(estimate.adjusted_temp, outcome["range"][0], outcome["range"][1], estimate.sigma), 4),
+            "p": round(estimate.probability, 4),
+            "ev": edge.adjusted_ev,
+            "raw_ev": edge.raw_ev,
+            "edge_penalties": edge.penalties,
+            "kelly": kelly,
+            "forecast_temp": estimate.adjusted_temp,
+            "raw_forecast_temp": forecast_temp,
+            "forecast_src": best_source or "ecmwf",
+            "sigma": estimate.sigma,
+            "ml": {
+                "adjusted_temp": estimate.adjusted_temp,
+                "sigma": estimate.sigma,
+                "confidence": estimate.confidence,
+                "bias": estimate.bias,
+                "mae": estimate.mae,
+                "n": estimate.n,
+                "tier": estimate.tier,
+            },
+            "features": features,
+            "opened_at": datetime.now(timezone.utc).isoformat(),
+            "status": "open",
+        }
+
+    def record_decision(self, market, loc, snap, features, signal, prob, edge, action, reason, horizon, outcome):
+        """Record a trading decision in the feedback system."""
+        self.engine.feedback_recorder.record_decision(
+            market=market, location=loc, modes=self.engine.modes,
+            snapshot=snap, features=features, signal=signal,
+            probability_estimate=prob, edge_estimate=edge,
+            action=action, reason=reason, horizon=horizon, outcome=outcome
+        )
+
+    def resolve_pending_markets(self, balance, state, result):
+        """Check and resolve all open markets."""
+        for market in self.engine.storage.load_all_markets():
+            if market.status == "resolved" or not market.position or market.position.get("status") != "open":
+                continue
+
+            new_balance, won, pnl = self.engine.resolve_market(market, balance)
+            if won is None or pnl is None:
+                continue
+
+            balance = new_balance
+            result.resolved += 1
+            if won: state.wins += 1
+            else: state.losses += 1
+
+            unit_sym = "°F" if market.unit == "F" else "°C"
+            bucket = f"{market.position['bucket_low']}-{market.position['bucket_high']}{unit_sym}"
+            temp_str = f"{market.actual_temp}{unit_sym}" if market.actual_temp is not None else "N/A"
+
+            if won:
+                self.engine.feedback.notify_trade_win(market.city_name, market.date, bucket, pnl, temp_str, balance)
+            else:
+                self.engine.feedback.notify_trade_loss(market.city_name, market.date, bucket, pnl, balance)
+
+            self.engine.emit(f"[{'WIN' if won else 'LOSS'}] {market.city_name} {market.date} | {pnl:+.2f}")
+            self.engine.storage.save_market(market)
+            time.sleep(0.3)
