@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 import backfill as backfill_cli
 from src.ai.diagnostics import format_ai_diagnostics, run_ai_diagnostics
+from src.ai.ourobouros import run_ourobouros
 from src.backtest.ranking_backtest import RankingBacktester, format_ranking_report
 from src.data.qa import DataQARunner, format_qa_report
 from src.data.learning import format_learning_validation, run_learning_validation
@@ -405,5 +406,21 @@ if __name__ == "__main__":
         run_ranking_backtest()
     elif cmd == "learning-validation":
         print_learning_validation()
+    elif cmd == "ouroboros":
+        import argparse
+        parser = argparse.ArgumentParser(description="Ouroboros auto-improvement")
+        parser.add_argument("--min-resolutions", type=int, default=10)
+        parser.add_argument("--max-retrain-per-day", type=int, default=2)
+        parser.add_argument("--patience", type=int, default=5)
+        parser.add_argument("--timeout", type=int, default=300)
+        args, _ = parser.parse_known_args()
+        
+        result = run_ourobouros(
+            min_resolutions=args.min_resolutions,
+            max_retrain_per_day=args.max_retrain_per_day,
+            patience=args.patience,
+            timeout=args.timeout,
+        )
+        print(f"[OUROBOROS] {result.get('action', 'unknown')}: {result.get('reason', '')}")
     else:
         print("Usage: python bot.py [run|status|report|resolve|test|train|data-qa|backfill|calibrate|ai-status|ranking-backtest|learning-validation] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")

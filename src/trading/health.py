@@ -23,7 +23,6 @@ def get_api_statuses(config, feedback: EngineFeedback) -> list[tuple[str, str, f
     tg_ok = "connected" if feedback.verify_notifications() else "error"
     statuses.append(("telegram", tg_ok, 0.0))
     statuses.append(("groq", "connected" if get_groq_client() is not None else "missing", 0.0))
-    statuses.append(("visual_crossing", "connected" if bool(config.vc_key) else "missing", 0.0))
     statuses.append(probe_http_api("polymarket", "https://gamma-api.polymarket.com/events?limit=1"))
     statuses.append(probe_http_api("open_meteo", "https://api.open-meteo.com/v1/forecast?latitude=40.7&longitude=-73.8&daily=temperature_2m_max&forecast_days=1"))
     return statuses

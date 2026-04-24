@@ -35,3 +35,8 @@ Thumbs.db
 # Test and scratch directories (not committed)
 scratch/
 data_test/
+
+# Runtime
+*.pid
+*.lock
+data/backups/

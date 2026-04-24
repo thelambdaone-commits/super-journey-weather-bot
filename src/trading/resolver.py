@@ -27,7 +27,7 @@ class MarketResolver:
 
         # Fetch actual temperature once
         if market.city and market.date and market.actual_temp is None:
-            actual = get_actual_temp(market.city, market.date, self.engine.config.vc_key)
+            actual = get_actual_temp(market.city, market.date)
             if actual is not None:
                 market.actual_temp = actual
 

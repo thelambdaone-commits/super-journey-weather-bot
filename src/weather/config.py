@@ -47,7 +47,6 @@ class Config:
     signal_top_k: int = 3
     
     # API Keys
-    vc_key: str = ""
     meteoblue_key: str = ""
     weatherbit_key: str = ""
     

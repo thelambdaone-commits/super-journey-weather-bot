@@ -136,44 +136,51 @@ def get_metar(city_slug: str) -> Optional[float]:
     return None
 
 
-def get_actual_temp(city_slug: str, date_str: str, vc_key: str = "") -> Optional[float]:
-    """Get actual temperature after market resolution."""
+def get_actual_temp(city_slug: str, date_str: str) -> Optional[float]:
+    """Get actual temperature after market resolution via Open-Meteo + Meteostat fallback."""
+    from datetime import datetime
+
     loc = get_by_slug(city_slug)
     temp_unit = "fahrenheit" if loc.unit == "F" else "celsius"
-    
-    # Try Visual Crossing first
-    if vc_key:
-        vc_unit = "us" if loc.unit == "F" else "metric"
-        url = (
-            f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
-            f"/{loc.station}/{date_str}/{date_str}"
-            f"?unitGroup={vc_unit}&key={vc_key}&include=days&elements=tempmax"
-        )
-        try:
-            data = requests.get(url, timeout=(5, 8)).json()
-            days = data.get("days", [])
-            if days and days[0].get("tempmax") is not None:
-                return round(float(days[0]["tempmax"]), 1) if loc.unit == "C" else round(float(days[0]["tempmax"]), 0)
-        except Exception:
-            pass
-    
-    # Fallback to Open-Meteo Archive
-    url = (
-        f"https://archive-api.open-meteo.com/v1/archive"
-        f"?latitude={loc.lat}&longitude={loc.lon}"
-        f"&start_date={date_str}&end_date={date_str}"
-        f"&daily=temperature_2m_max"
-        f"&temperature_unit={temp_unit}"
-    )
+
+    # 1) Open-Meteo Archive — gratuit, open-source, sans clé
     try:
-        data = requests.get(url, timeout=(10, 15)).json()
-        daily = data.get("daily", {})
-        temps = daily.get("temperature_2m_max", [])
-        if temps and temps[0] is not None:
-            return round(float(temps[0]), 1) if loc.unit == "C" else round(float(temps[0]), 0)
+        url = (
+            "https://archive-api.open-meteo.com/v1/archive"
+            f"?latitude={loc.lat}&longitude={loc.lon}"
+            f"&start_date={date_str}&end_date={date_str}"
+            f"&daily=temperature_2m_max"
+            f"&temperature_unit={temp_unit}"
+            f"&timezone=auto"
+        )
+        data = requests.get(url, timeout=(5, 8)).json()
+        values = data.get("daily", {}).get("temperature_2m_max", [])
+
+        if values and values[0] is not None:
+            return round(float(values[0]), 1 if loc.unit == "C" else 0)
+
     except Exception:
         pass
-    
+
+    # 2) Meteostat fallback — gratuit/open-source
+    try:
+        from meteostat import Point, Daily
+
+        day = datetime.strptime(date_str, "%Y-%m-%d")
+        point = Point(loc.lat, loc.lon)
+        df = Daily(point, day, day).fetch()
+
+        if not df.empty and "tmax" in df.columns:
+            value = df.iloc[0]["tmax"]
+
+            if value is not None:
+                if loc.unit == "F":
+                    return round((float(value) * 9 / 5) + 32, 0)
+                return round(float(value), 1)
+
+    except Exception:
+        pass
+
     return None
 
 

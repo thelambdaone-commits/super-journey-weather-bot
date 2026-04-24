@@ -20,23 +20,17 @@ from src.weather.config import get_config
 def main(args: list[str]) -> int:
     """Run backfill operations."""
     config = get_config()
-    vc_key = config.vc_key
     dry_run = "--dry-run" in args
 
     if "--help" in args or "-h" in args:
         print(__doc__)
         return 0
 
-    if "--vc-key" in args:
-        idx = args.index("--vc-key")
-        if idx + 1 < len(args):
-            vc_key = args[idx + 1]
-
     run_actuals = "--actuals" in args or "--all" in args or not args
     run_dataset = "--dataset" in args or "--all" in args
 
     if run_actuals:
-        summary = backfill_actuals(vc_key=vc_key, dry_run=dry_run)
+        summary = backfill_actuals(dry_run=dry_run)
         print("Actuals backfill:")
         for key, value in summary.items():
             print(f"  {key}: {value}")

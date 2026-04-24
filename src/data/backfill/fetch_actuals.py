@@ -42,7 +42,7 @@ def find_missing_actuals(markets_dir: str = "data/markets") -> list[dict]:
     return missing
 
 
-def backfill_actuals(markets_dir: str = "data/markets", vc_key: str = "", dry_run: bool = False) -> dict:
+def backfill_actuals(markets_dir: str = "data/markets", dry_run: bool = False) -> dict:
     """Backfill actual temperatures into stored market files."""
     missing = find_missing_actuals(markets_dir)
     updated = 0
@@ -51,7 +51,7 @@ def backfill_actuals(markets_dir: str = "data/markets", vc_key: str = "", dry_ru
     for item in missing:
         city = item["city"]
         date_str = item["date"]
-        temp = get_actual_temp(city, date_str, vc_key=vc_key) if city and date_str else None
+        temp = get_actual_temp(city, date_str) if city and date_str else None
         if temp is None:
             failed += 1
             continue

@@ -4,3 +4,4 @@ python-dotenv
 groq
 joblib
 scikit-learn
+meteostat
