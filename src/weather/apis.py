@@ -1,12 +1,15 @@
 """
 Weather API clients - multiple sources with fallback.
 """
+import logging
 import math
 import time
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 from .locations import Location, get_by_slug, get_timezone, get_forecast_priority
+
+logger = logging.getLogger(__name__)
 
 
 class WeatherAPIError(Exception):
@@ -159,9 +162,9 @@ def get_actual_temp(city_slug: str, date_str: str) -> Optional[float]:
         if values and values[0] is not None:
             return round(float(values[0]), 1 if loc.unit == "C" else 0)
 
-    except Exception:
-        pass
-
+    except Exception as e:
+        logger.warning(f"Open-Meteo Archive failed for {city_slug}: {e}")
+    
     # 2) Meteostat fallback — gratuit/open-source
     try:
         from meteostat import Point, Daily
@@ -178,8 +181,8 @@ def get_actual_temp(city_slug: str, date_str: str) -> Optional[float]:
                     return round((float(value) * 9 / 5) + 32, 0)
                 return round(float(value), 1)
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Meteostat fallback failed for {city_slug}: {e}")
 
     return None
 

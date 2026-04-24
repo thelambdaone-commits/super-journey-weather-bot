@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import time
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -103,8 +104,8 @@ class TradingEngine:
             return False
             
         # 2. Daily Loss Limit (Placeholder for daily tracking)
-        # Assuming we track state.daily_pnl
-        daily_loss_pct = abs(state.daily_pnl) / state.starting_balance if state.starting_balance > 0 else 0
+        # Only count losses, not gains (max(0, -pnl))
+        daily_loss_pct = max(0.0, -state.daily_pnl) / state.starting_balance if state.starting_balance > 0 else 0.0
         if daily_loss_pct > 0.05: # 5% daily loss limit
             self.emit(f"🚨 RISK ALERT: Daily Loss Limit exceeded ({daily_loss_pct*100:.1f}%)")
             return False

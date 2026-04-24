@@ -7,6 +7,7 @@ from __future__ import annotations
 import signal
 import sys
 import logging
+import os
 from datetime import datetime, timezone
 
 import backfill as backfill_cli
