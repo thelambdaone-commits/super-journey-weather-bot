@@ -241,7 +241,7 @@ class MarketScanner:
             
             candidate_features = dict(base_features)
             candidate_features.update(self.engine.feature_engine.build(loc, snap, outcomes, hours, candidate))
-            current_edge = self.engine.edge_engine.compute(estimate.probability, candidate["ask"], candidate_features)
+            current_edge = self.engine.edge_engine.compute(estimate.probability, candidate["ask"], candidate_features, best_source)
             
             if should_skip_outcome(self.engine.config, candidate, candidate_features, current_edge.adjusted_ev):
                 continue

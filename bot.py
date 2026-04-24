@@ -389,6 +389,105 @@ if __name__ == "__main__":
             print("Use: python dashboard.py")
     elif cmd == "resolve":
         force_resolve_all()
+    elif cmd == "poll":
+        from datetime import date, timedelta
+        import argparse
+        parser = argparse.ArgumentParser(description="Poll actual temps")
+        parser.add_argument("--date", type=str, default=None)
+        parser.add_argument("--days", type=int, default=0)
+        parser.add_argument("--city", type=str)
+        parser.add_argument("--json", action="store_true")
+        args, _ = parser.parse_known_args()
+        
+        from src.weather.apis import get_actual_temp
+        from src.weather.locations import LOCATIONS
+        
+        if args.date:
+            date_str = args.date
+        elif args.days > 0:
+            d = date.today() - timedelta(days=args.days)
+            date_str = d.isoformat()
+        else:
+            date_str = date.today().isoformat()
+        
+        if args.city:
+            loc = LOCATIONS.get(args.city)
+            if not loc:
+                print(f"Unknown: {args.city}")
+            else:
+                temp = get_actual_temp(args.city, date_str)
+                print(f"{args.city}: {temp}°C" if temp else f"{args.city}: N/A")
+        else:
+            print(f"=== POLLING ACTUALS: {date_str} ===")
+            results = {}
+            for slug, loc in LOCATIONS.items():
+                temp = get_actual_temp(slug, date_str)
+                if temp:
+                    results[slug] = temp
+            
+            if args.json:
+                import json
+                print(json.dumps(results, indent=2))
+            else:
+                print(f"{'City':<15} {'Temp':<8}")
+                print("-" * 25)
+                for slug, temp in sorted(results.items()):
+                    print(f"{slug:<15} {temp}°C")
+                print(f"\nTotal: {len(results)}/{len(LOCATIONS)}")
+    elif cmd == "auto-resolve":
+        config = get_config()
+        engine = create_engine()
+        result = engine.resolver.auto_resolve_pending()
+        print(f"=== AUTO-RESOLVE ===")
+        print(f"Resolved: {result.get('total', 0)}")
+        if result.get('resolved'):
+            print("\nResolved markets:")
+            for m in result['resolved'][:10]:
+                print(f"  {m['city']} | {m['date']} | {m['actual']}°C")
+        if result.get('pending'):
+            print(f"\nPending ({len(result['pending'])})")
+            for m in result['pending'][:5]:
+                print(f"  {m['city']} | {m['date']}")
+    elif cmd == "errors":
+        config = get_config()
+        engine = create_engine()
+        errors = engine.resolver.get_recent_errors(days=7)
+        print("=== RECENT FORECAST ERRORS ===")
+        print()
+        if not errors:
+            print("Aucune erreur disponible")
+        else:
+            print(f"{'Source':<12} {'Mean':>8} {'MAE':>8} {'N':>5}")
+            print("-" * 40)
+            for source, stats in sorted(errors.items()):
+                print(f"{source:<12} {stats['mean']:>+7.2f} {stats['mae']:>7.2f} {stats['n']:>5}")
+    elif cmd == "live-edge":
+        config = get_config()
+        engine = create_engine()
+        
+        # Get recent errors and update live bias
+        errors = engine.resolver.get_recent_errors(days=7)
+        ecmwf_bias = errors.get('ecmwf', {}).get('mean', 0)
+        hrrr_bias = errors.get('hrrr', {}).get('mean', 0)
+        
+        # Update Edge Engine with live biases
+        from src.strategy.edge import update_live_bias
+        update_live_bias("ecmwf", ecmwf_bias)
+        update_live_bias("hrrr", hrrr_bias)
+        
+        print("=== LIVE EDGE (Real-Time Adjusted) ===")
+        print(f"ECMWF bias: {ecmwf_bias:+.2f}°C")
+        print(f"HRRR bias: {hrrr_bias:+.2f}°C")
+        
+        # Check retrain status
+        should_train, reason = engine.resolver.should_retrain(min_resolutions=10)
+        print(f"Retrain: {reason}")
+    elif cmd == "retrain-check":
+        engine = create_engine()
+        should_trigger, details = engine.resolver.check_and_trigger_retrain(min_resolutions=10)
+        print("=== RETRAIN CHECK ===")
+        print(f"Ready: {should_trigger}")
+        print(f"Details: {details}")
     elif cmd == "test":
         send_test_message()
     elif cmd == "train":

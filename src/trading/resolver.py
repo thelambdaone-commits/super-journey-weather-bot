@@ -1,18 +1,132 @@
 """
-Market resolution logic.
+Market resolution logic with real-time actual polling.
 """
 from __future__ import annotations
 import time
-from datetime import datetime, timezone
+import json
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from .polymarket import check_market_resolved
 from ..weather.apis import get_actual_temp
 from ..weather.locations import LOCATIONS
 
 class MarketResolver:
-    """Logic for resolving markets and calculating PnL."""
+    """Logic for resolving markets and calculating PnL with real-time actuals."""
     
     def __init__(self, engine):
         self.engine = engine
+        self._last_poll_cache = {}
+    
+    def poll_actual(self, city_slug: str, date_str: str) -> float | None:
+        """Poll actual temperature with caching."""
+        cache_key = f"{city_slug}:{date_str}"
+        if cache_key in self._last_poll_cache:
+            return self._last_poll_cache[cache_key]
+        
+        actual = get_actual_temp(city_slug, date_str)
+        if actual is not None:
+            self._last_poll_cache[cache_key] = actual
+        return actual
+    
+    def auto_resolve_pending(self) -> dict:
+        """Auto-resolve all pending markets using real-time actuals."""
+        resolved_count = 0
+        results = {"resolved": [], "failed": [], "pending": []}
+        
+        for market in self.engine.storage.load_all_markets():
+            if market.status == "resolved":
+                continue
+            if not market.position and not market.paper_position:
+                continue
+            
+            # Poll actual temperature
+            if market.city and market.date:
+                actual = self.poll_actual(market.city, market.date)
+                if actual is not None:
+                    market.actual_temp = actual
+                    self.engine.storage.save_market(market)
+                    resolved_count += 1
+                    results["resolved"].append({
+                        "city": market.city,
+                        "date": market.date,
+                        "actual": actual
+                    })
+                else:
+                    results["pending"].append({
+                        "city": market.city,
+                        "date": market.date
+                    })
+            else:
+                results["failed"].append({
+                    "city": market.city,
+                    "reason": "missing_data"
+                })
+        
+        results["total"] = resolved_count
+        return results
+
+    def get_recent_errors(self, days: int = 7) -> dict:
+        """Get recent forecast errors for edge adjustment."""
+        from pathlib import Path
+        from ..data.loader import load_rows
+        
+        errors_by_source = {}
+        
+        # Load dataset rows
+        dataset_path = Path(self.engine.config.data_dir) / "dataset_rows.jsonl"
+        rows = load_rows(dataset_path)
+        
+        for row in rows:
+            if row.actual_temp is None:
+                continue
+            if row.forecast_temp is None:
+                continue
+            
+            source = row.forecast_source or "unknown"
+            err = row.forecast_temp - row.actual_temp
+            if source not in errors_by_source:
+                errors_by_source[source] = []
+            errors_by_source[source].append(err)
+        
+        # Calculate stats
+        result = {}
+        import numpy as np
+        for source, errors in errors_by_source.items():
+            arr = np.array(errors)
+            result[source] = {
+                "mean": float(np.mean(arr)),
+                "std": float(np.std(arr)),
+                "mae": float(np.mean(np.abs(arr))),
+                "n": len(errors)
+            }
+        
+        return result
+
+    def should_retrain(self, min_resolutions: int = 10) -> tuple[bool, str]:
+        """Check if system should retrain based on recent resolutions."""
+        recent_count = 0
+        for market in self.engine.storage.load_all_markets():
+            if market.status == "resolved" and market.actual_temp:
+                recent_count += 1
+        
+        if recent_count >= min_resolutions:
+            return True, f"{recent_count} résolutions récentes"
+        
+        return False, f"Pas assez: {recent_count}/{min_resolutions}"
+
+    def check_and_trigger_retrain(self, min_resolutions: int = 10) -> tuple[bool, str]:
+        """Check if should retrain and optionally trigger."""
+        should_train, reason = self.should_retrain(min_resolutions)
+        
+        if should_train:
+            # Get recent errors for adjustment
+            errors = self.get_recent_errors(days=7)
+            ecmwf_bias = errors.get('ecmwf', {}).get('mean', 0)
+            hrrr_bias = errors.get('hrrr', {}).get('mean', 0)
+            
+            return True, f"{reason} | ECMWF: {ecmwf_bias:+.2f}°C | HRRR: {hrrr_bias:+.2f}°C"
+        
+        return False, reason
 
     def resolve_market(self, market, balance: float):
         """Resolve a single market (live and paper)."""
