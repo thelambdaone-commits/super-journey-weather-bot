@@ -2,10 +2,33 @@
 Storage - persistence layer for state and markets.
 """
 import json
+import os
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
+
+
+def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Write file atomically using temp file + rename."""
+    path = Path(path)
+    dir_path = path.parent
+    
+    # Write to temp file in same directory
+    fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding=encoding) as f:
+            f.write(content)
+        # Atomic rename
+        os.replace(tmp_path, path)
+    except Exception:
+        # Clean up temp file on error
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        raise
 
 
 @dataclass
@@ -82,11 +105,9 @@ class Storage:
         return State()
     
     def save_state(self, state: State):
-        """Save bot state."""
-        self.state_file.write_text(
-            json.dumps(asdict(state), indent=2, ensure_ascii=False),
-            encoding="utf-8"
-        )
+        """Save bot state atomically."""
+        content = json.dumps(asdict(state), indent=2, ensure_ascii=False)
+        _atomic_write(self.state_file, content, encoding="utf-8")
     
     # === Markets ===
     def market_path(self, city: str, date: str) -> Path:
@@ -101,11 +122,12 @@ class Storage:
             return Market(**data)
         return None
     
-    def save_market(self, market: Market):
-        """Save market data."""
-        path = self.market_path(market.city, market.date)
-        data = asdict(market)
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+def save_market(self, market: Market):
+    """Save market data atomically."""
+    path = self.market_path(market.city, market.date)
+    data = asdict(market)
+    content = json.dumps(data, indent=2, ensure_ascii=False)
+    _atomic_write(path, content, encoding="utf-8")
     
     def load_all_markets(self) -> List[Market]:
         """Load all markets."""

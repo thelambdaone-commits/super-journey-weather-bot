@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -8,6 +9,40 @@ load_dotenv()
 
 from ..weather.config import get_config
 from .formatter import format_weather_signal
+
+
+def escape_markdown(text: str) -> str:
+    """Escape special chars to prevent Markdown injection."""
+    if not text:
+        return ""
+    # Escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    escape_chars = r'([_*\[\\]()~`>#+\-=|{}.!])'
+    return re.sub(escape_chars, r'\\\1', str(text))
+
+
+def _format_signal_msg(city: str, date: str, bucket: str, price: float, ev: float, 
+                    cost: float, source: str, question: str, note: str = "") -> str:
+    """Format signal message with escaped fields."""
+    # Escape all user-supplied fields
+    safe_city = escape_markdown(city)
+    safe_question = escape_markdown(question[:50] if question else "")
+    safe_note = escape_markdown(note[:100] if note else "")
+    
+    msg = (
+        f"🌡️ *SIGNAL METEO*\n\n"
+        f"📍 Ville: *{safe_city}*\n"
+        f"📅 Date: {date}\n"
+        f"📦 Bucket: `{bucket}`\n"
+        f"💰 Prix: ${price:.3f}\n"
+        f"⚡ EV: `+{ev:.2f}`\n"
+        f"💵 Mise: ${cost:.2f}\n"
+        f"📡 Source: {source.upper()}\n"
+    )
+    if safe_question:
+        msg += f"\n🏛️ Question: _{safe_question}_"
+    if safe_note:
+        msg += f"\n📝 Note: _{safe_note}_"
+    return msg
 
 
 class TelegramNotifier:

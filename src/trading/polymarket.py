@@ -134,6 +134,10 @@ def get_outcomes(event: Dict) -> List[Dict]:
             # outcomePrices = [YES_price, NO_price]
             yes_price = float(prices[0])
             no_price = float(prices[1]) if len(prices) > 1 else 0.5
+            # DEFINE ask/bid before using them
+            ask = yes_price
+            bid = no_price
+            spread = max(0.0, ask - bid)
         except (json.JSONDecodeError, ValueError, IndexError) as e:
             logger.error(f"Skipping market {mid} due to price error: {e}")
             continue
@@ -144,8 +148,10 @@ def get_outcomes(event: Dict) -> List[Dict]:
             "range": rng,
             "yes_price": round(yes_price, 4),
             "no_price": round(no_price, 4),
+            "ask": round(ask, 4),
+            "bid": round(bid, 4),
             "price": round(yes_price, 4),
-            "spread": round(ask - bid, 4),
+            "spread": round(spread, 4),
             "volume": round(volume, 0),
         })
     
