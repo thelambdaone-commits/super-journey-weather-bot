@@ -55,7 +55,9 @@ def check_market_resolved(market_id: str) -> Optional[bool]:
         prices = json.loads(data.get("outcomePrices", "[0.5,0.5]"))
         if not isinstance(prices, list) or len(prices) < 1:
             return None
+        # outcomePrices = [YES_price, NO_price]
         yes_price = float(prices[0])
+        no_price = float(prices[1]) if len(prices) > 1 else 0.5
         if yes_price >= 0.95:
             return True
         elif yes_price <= 0.05:
@@ -129,8 +131,9 @@ def get_outcomes(event: Dict) -> List[Dict]:
             prices = json.loads(prices_str)
             if not isinstance(prices, list) or len(prices) < 1:
                 continue
-            bid = float(prices[0])
-            ask = float(prices[1]) if len(prices) > 1 else bid
+            # outcomePrices = [YES_price, NO_price]
+            yes_price = float(prices[0])
+            no_price = float(prices[1]) if len(prices) > 1 else 0.5
         except (json.JSONDecodeError, ValueError, IndexError) as e:
             logger.error(f"Skipping market {mid} due to price error: {e}")
             continue
@@ -139,9 +142,9 @@ def get_outcomes(event: Dict) -> List[Dict]:
             "question": question,
             "market_id": mid,
             "range": rng,
-            "bid": round(bid, 4),
-            "ask": round(ask, 4),
-            "price": round(bid, 4),
+            "yes_price": round(yes_price, 4),
+            "no_price": round(no_price, 4),
+            "price": round(yes_price, 4),
             "spread": round(ask - bid, 4),
             "volume": round(volume, 0),
         })

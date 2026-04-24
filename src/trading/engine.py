@@ -122,6 +122,17 @@ class TradingEngine:
 
     def run_forever(self) -> None:
         """Run the main engine loop."""
+        import os
+        
+        # LIVE TRADE GUARD - Double confirmation required
+        if self.modes.live_trade:
+            confirm_env = os.environ.get("LIVE_TRADE_CONFIRM", "").lower()
+            if confirm_env != "true":
+                self.emit("🚨 BLOCKED: LIVE_TRADE requires LIVE_TRADE_CONFIRM=true in .env")
+                self.emit("   Add to .env: LIVE_TRADE_CONFIRM=true")
+                self.emit("   This is a safety guard to prevent accidental live trading.")
+                return
+        
         self.emit(f"\n{'='*50}")
         self.emit(f"WEATHERBOT ({bot_mode_label(self.modes)})")
         self.emit(f"{'='*50}")

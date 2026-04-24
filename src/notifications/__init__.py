@@ -34,8 +34,8 @@ class TelegramNotifier:
         except Exception:
             return False
     
-    def send(self, message: str, parse_mode: Optional[str] = "Markdown", chat_id: Optional[str] = None) -> bool:
-        """Send message to Telegram."""
+    def send(self, message: str, parse_mode: Optional[str] = None, chat_id: Optional[str] = None) -> bool:
+        """Send message to Telegram. parse_mode=None for security (prevents injection)."""
         target_chat_id = chat_id or self.chat_id
         if not self.token or not target_chat_id:
             return False
