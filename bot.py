@@ -488,6 +488,26 @@ if __name__ == "__main__":
         print("=== RETRAIN CHECK ===")
         print(f"Ready: {should_trigger}")
         print(f"Details: {details}")
+    elif cmd == "gem-check":
+        from src.strategy.gem import GEMDetector
+        detector = GEMDetector()
+        print(detector.format_report())
+        print()
+        
+        # Test case
+        test_score = detector.score(
+            model_probability=0.70,
+            market_price=0.45,
+            net_ev=0.12,
+            spread=0.02,
+            volume=8000,
+            confidence=0.70,
+            question="Paris max temperature between 20-21°C on 2026-04-25",
+        )
+        print("=== TEST CASE ===")
+        print(f"Score: {test_score.total:.1f}")
+        print(f"Valid: {test_score.is_valid}")
+        print(f"Divergence: {test_score.divergence:.0%}")
     elif cmd == "test":
         send_test_message()
     elif cmd == "train":
