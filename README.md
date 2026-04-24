@@ -258,5 +258,27 @@ weatherbot/
 
 ---
 
-## ⚠️ Disclaimer
-*This system is currently in **Paper Trading Validation phase**. It is designed for educational and research purposes. No capital should be committed without a minimum of 30-60 days of empirical validation under monitored conditions.*
+## ⚠️ Disclaimer & Legal
+
+**WeatherBot** est un système de trading quantitatif expérimental conçu à des fins éducatives et de recherche.
+
+### Limitations
+- **Pas de conseil financier** : Ce systeme ne constitue pas un conseil en investissement
+- **Paper Trading uniquement** : En mode live, n'utilisez que du capital que vous pouvez vous permettre de perdre
+- **Risque de perte** : Les marchés predictionnels comportent des risques significatifs
+- **Validation requise** : Au minimum 30-60 jours de validation empirique avant tout capital réel
+
+### Responsibility
+- L'utilisateur est seul responsable de ses décisions de trading
+- Les performances passées ne garantissent pas les résultats futurs
+- Aucune garantie expresse ou implicite
+
+###对本システム
+Ce système est actuellement en **phase de validation Paper Trading**. Il est conçu à des fins éducatives et de recherche. Aucun capital ne doit être engagé sans un minimum de 30-60 jours de validation empirique sous conditions surveillées.
+
+*Ce projet est distribué tel quel, sans garantie d'aucune sorte.*
+
+---
+
+## 📜 License
+MIT License - See LICENSE file for details
