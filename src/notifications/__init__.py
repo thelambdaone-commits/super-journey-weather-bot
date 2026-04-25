@@ -70,11 +70,28 @@ class TelegramNotifier:
         except Exception:
             return False
     
-    def send(self, message: str, parse_mode: Optional[str] = None, chat_id: Optional[str] = None) -> bool:
-        """Send message to Telegram. parse_mode=None for security (prevents injection)."""
+    def delete_message(self, message_id: int, chat_id: Optional[str] = None) -> bool:
+        """Delete a message from Telegram."""
         target_chat_id = chat_id or self.chat_id
         if not self.token or not target_chat_id:
             return False
+        
+        url = f"https://api.telegram.org/bot{self.token}/deleteMessage"
+        payload = {
+            "chat_id": target_chat_id,
+            "message_id": message_id,
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=5)
+            return response.ok
+        except Exception:
+            return False
+
+    def send(self, message: str, parse_mode: Optional[str] = None, chat_id: Optional[str] = None) -> Optional[int]:
+        """Send message to Telegram. Returns message_id if successful."""
+        target_chat_id = chat_id or self.chat_id
+        if not self.token or not target_chat_id:
+            return None
         
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {
@@ -88,12 +105,15 @@ class TelegramNotifier:
             response = requests.post(url, json=payload, timeout=10)
             if not response.ok:
                 print(f"Telegram error {response.status_code}: {response.text}")
-            response.raise_for_status()
+                return None
+            
             data = response.json()
-            return bool(data.get("ok"))
+            if data.get("ok"):
+                return data["result"]["message_id"]
+            return None
         except Exception as exc:
             print(f"Telegram exception: {exc}")
-            return False
+            return None
     
     def notify_trade_open(self, city: str, date: str, bucket: str, price: float, 
                        ev: float, cost: float, source: str, ai_note: str = "") -> bool:

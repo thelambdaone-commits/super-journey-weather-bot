@@ -554,5 +554,24 @@ if __name__ == "__main__":
             timeout=args.timeout,
         )
         print(f"[OUROBOROS] {result.get('action', 'unknown')}: {result.get('reason', '')}")
+    elif cmd == "purge":
+        import argparse
+        parser = argparse.ArgumentParser(description="Purge last N messages from Telegram")
+        parser.add_argument("--limit", type=int, default=100, help="Number of messages to try deleting")
+        args, _ = parser.parse_known_args()
+        
+        notifier = get_notifier()
+        print(f"=== PURGE CHANNEL (Limit: {args.limit}) ===")
+        
+        # Probe to get current message ID
+        probe_id = notifier.send("🧹 **PURGE INITIALISÉE**", parse_mode="Markdown")
+        if not probe_id:
+            print("❌ Erreur: Impossible d'initialiser la purge.")
+        else:
+            count = 0
+            for i in range(probe_id, probe_id - args.limit, -1):
+                if notifier.delete_message(i):
+                    count += 1
+            print(f"✅ Terminé: {count} messages supprimés.")
     else:
-        print("Usage: python bot.py [run|status|report|resolve|test|train|data-qa|backfill|calibrate|ai-status|ranking-backtest|learning-validation] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")
+        print("Usage: python bot.py [run|status|report|resolve|test|train|data-qa|backfill|calibrate|ai-status|ranking-backtest|learning-validation|purge] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")
