@@ -120,7 +120,7 @@ class GEMDetector:
                 liquidity=volume,
                 spread_penalty=spread,
                 is_valid=False,
-                exclusion_reason=reason,
+                exclusion_reason=self.get_readable_reason(reason),
             )
         
         # Calculate components
@@ -160,6 +160,40 @@ class GEMDetector:
             ),
         )
     
+    def get_readable_reason(self, reason: str) -> str:
+        """Map technical reason strings to human-readable French."""
+        if not reason:
+            return ""
+            
+        if reason.startswith("volume_too_low"):
+            val = reason.split(":")[-1]
+            return f"Volume insuffisant (${val})"
+        elif reason.startswith("spread_too_high"):
+            val = reason.split(":")[-1]
+            return f"Spread trop élevé ({val})"
+        elif reason.startswith("excluded_pattern"):
+            val = reason.split(":")[-1]
+            return f"Modèle exclu ({val})"
+        
+        mapping = {
+            "empty_question": "Question vide",
+            "no_outcomes": "Aucun résultat",
+            "gem_valid": "Signal GEM validé",
+            "net_ev_too_low": "Edge insuffisant",
+            "divergence_too_low": "Divergence trop faible",
+            "confidence_too_low": "Confiance trop basse",
+        }
+        
+        # Handle cases with values (e.g. net_ev_too_low:0.05)
+        base_reason = reason.split(":")[0]
+        if base_reason in mapping:
+            msg = mapping[base_reason]
+            if ":" in reason:
+                msg += f" ({reason.split(':')[-1]})"
+            return msg
+            
+        return reason
+
     def should_trade(
         self,
         model_probability: float,
@@ -175,42 +209,25 @@ class GEMDetector:
         # Check exclusions
         is_excluded, reason = self.is_excluded(question, [{"spread": spread, "volume": volume}])
         if is_excluded:
-            # Map technical reasons to human-readable French
-            if reason.startswith("volume_too_low"):
-                val = reason.split(":")[-1]
-                display_reason = f"Volume insuffisant (${val})"
-            elif reason.startswith("spread_too_high"):
-                val = reason.split(":")[-1]
-                display_reason = f"Spread trop élevé ({val})"
-            elif "excluded_pattern" in reason:
-                val = reason.split(":")[-1]
-                display_reason = f"Modèle exclu ({val})"
-            else:
-                mapping = {
-                    "empty_question": "Question vide",
-                    "no_outcomes": "Aucun résultat",
-                }
-                display_reason = mapping.get(reason, reason)
-            
-            return False, display_reason
+            return False, self.get_readable_reason(reason)
         
         # Calculate divergence
         divergence = self.calc_divergence(model_probability, market_price)
         
         # Strict thresholds
         if net_ev < self.min_ev:
-            return False, f"Edge insuffisant ({net_ev:.1%})"
+            return False, self.get_readable_reason(f"net_ev_too_low:{net_ev:.1%}")
         
         if spread > self.max_spread:
-            return False, f"Spread trop large ({spread:.1%})"
+            return False, self.get_readable_reason(f"spread_too_high:{spread:.1%}")
         
         if divergence < self.min_divergence:
-            return False, f"Divergence trop faible ({divergence:.1%})"
+            return False, self.get_readable_reason(f"divergence_too_low:{divergence:.1%}")
         
         if confidence < self.min_confidence:
-            return False, f"Confiance trop basse ({confidence:.0%})"
+            return False, self.get_readable_reason(f"confidence_too_low:{confidence:.0%}")
         
-        return True, "Signal GEM validé"
+        return True, self.get_readable_reason("gem_valid")
     
     def get_thresholds(self) -> dict:
         """Get current GEM thresholds."""
