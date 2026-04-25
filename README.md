@@ -1,54 +1,68 @@
-# 🔬 WeatherBot v1.0 - Quantitative Forecast Desk
+# WeatherBot - Weather Prediction Market Research Bot
 
-**WeatherBot** is an institutional-grade quantitative trading framework designed for forecasting and executing trades on weather-based prediction markets (Polymarket). It integrates advanced probabilistic calibration, multi-layered risk management, and a comprehensive audit trail for independent alpha validation.
+WeatherBot is a modular research and paper-trading bot for weather prediction markets. It scans weather markets, estimates bucket probabilities, ranks opportunities, sends Telegram alerts, records decisions/resolutions, and maintains an audit trail for model validation.
+
+Current posture as of 2026-04-25: **paper + signal mode is operational**. Live trading is intentionally gated off until the dataset, calibration, and backtests satisfy the live-readiness checks.
 
 ---
 
-## 🏛 Architecture & Design
+## Architecture
 
 The system follows a modular, decoupled architecture focused on reproducibility and auditability.
 
-- **`src/ml`**: Lightweight calibration models (Brier/LogLoss optimization) to adjust raw forecasts based on historical bias and RMSE.
-- **`src/strategy`**: Advanced decision engine including **Kelly Criterion** sizing, **Expected Value (EV)** calculation, and **Signal Quality** filtering.
-- **`src/trading`**: Orchestration engine for real-time market scanning, resolution, and execution (Live & Paper).
-- **`src/data`**: A robust data layer with an immutable audit trail (JSONL), anti-leakage scanners, and reproducibility hashing.
-- **`src/weather`**: Multi-source forecast ingestion (Open-Meteo, Meteostat) with automated drift monitoring.
-- **`src/ai/ourobouros`**: Auto-improvement loop for GEM factory with self-training capabilities.
+- **`src/weather`**: forecast and actual-temperature ingestion.
+- **`src/trading`**: runtime engine, scanner, resolver, paper account, and Polymarket CLOB execution adapter.
+- **`src/strategy`**: EV, Kelly sizing, ranking, quality filters, and portfolio risk limits.
+- **`src/probability`**: bucket probability, uncertainty, and calibration.
+- **`src/ml`**: lightweight forecast-bias model with conservative sample-size shrinkage.
+- **`src/data`**: append-only decision/resolution rows, QA, backtests, and reproducibility helpers.
+- **`src/ai`**: Groq diagnostics and anomaly review.
+- **`src/ai/ourobouros`**: guarded auto-improvement loop for retrain/calibration attempts.
 
 ---
 
-## 🛡 Risk Management & Audit
+## Risk Management
 
-Designed for a solo quantitative desk, the system enforces strict safety layers:
+The system enforces strict safety layers:
 
 - **Portfolio Risk Layer**:
   - Regional concentration limits (Europe, US, LatAm, Pacific).
   - Exposure caps per city and global portfolio.
-  - **Effective Number of Bets (Inverse HHI)**: Real-time diversification monitoring.
+  - Effective-number-of-bets monitoring via inverse HHI.
 - **Audit Framework**:
-  - **Anti-Leakage Scanner**: Ensures no future information contaminates decision rows.
-  - **Calibration Audit**: Real-time monitoring of probability drift via Brier and Log Loss.
-  - **Reproducibility**: Automatic hashing of code and configuration for every audit report.
+  - anti-leakage checks,
+  - calibration diagnostics,
+  - ranking backtests against naive/random baselines,
+  - reproducible model/data hashing.
+- **Live-trading guardrails**:
+  - `LIVE_TRADE=False` by default,
+  - live requires `LIVE_TRADE_CONFIRM=true`,
+  - live requires `POLYMARKET_PRIVATE_KEY`,
+  - CLOB execution uses real orderbook bid/ask rather than Gamma display prices,
+  - synthetic stop handling cancels the resting take-profit order before market close.
 
 ---
 
-## 📊 APIs Used
+## APIs Used
 
+| API | Credential | Purpose |
+|-----|------------|---------|
 | Open-Meteo | None | ECMWF + HRRR forecasts |
 | Open-Meteo Archive | None | Historical temps for resolution |
 | Meteostat | None (pip) | Fallback historical temps |
 | Aviation Weather (METAR) | None | Real-time station observations |
 | Polymarket Gamma | None | Market data |
+| Polymarket CLOB | Wallet credentials for live | Executable orderbook and order posting |
 | Groq | Free key | AI analysis |
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Installation
 ```bash
-git clone <your-repository-url>
-cd <your-repository-name>
+git clone git@github.com:thelambdaone-commits/super-journey-weather-bot.git
+cd super-journey-weather-bot
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -60,16 +74,16 @@ Copy the environment template and fill in your API keys:
 cp .env.example .env
 ```
 
-### 3. Execution
+### 3. Safe Execution
 The bot is controlled via a unified CLI:
 ```bash
-# Start paper trading with real-time GEM alerts
-python bot.py run --paper-on --signal-on
+# Start paper trading with Telegram signal alerts
+python bot.py run --paper-on --signal-on --live-off --tui-off
 
 # View status
 python bot.py status
 
-# Generate a comprehensive quantitative audit report
+# Generate an audit report
 python bot.py audit
 
 # View paper trading performance
@@ -86,13 +100,28 @@ python bot.py calibrate
 
 # Backfill historical temperatures
 python bot.py backfill --actuals
+
+# Data readiness checks
+python bot.py data-qa
+python bot.py learning-validation
+python bot.py ranking-backtest
+
+# Telegram connectivity check
+python bot.py test
 ```
+
+Recommended long-running command:
+```bash
+nohup ./venv/bin/python -u bot.py run --paper-on --signal-on --live-off --tui-off > logs/signal_bot.log 2>&1 &
+```
+
+Current production-safe mode is paper/signal only. Do not enable `--live-on` until the live readiness checklist passes.
 
 ---
 
-## 🐍 Ouroboros - Auto-Improvement Loop
+## Ouroboros Auto-Improvement Loop
 
-Ouroboros is an **automatic self-improvement loop** that learns from trading decisions and resolutions. It trains the model, calibrates probabilities, and tunes GEM thresholds autonomously.
+Ouroboros is a guarded auto-improvement loop that learns from paper-trading decisions and market resolutions. It is designed to retrain and recalibrate only when there are enough new resolved samples and the daily retrain limit has not been reached.
 
 ### Architecture
 ```
@@ -105,13 +134,13 @@ SCAN → SIGNAL → TRADE → RESOLUTION → FEEDBACK
                             nouveau modèle + calibration
 ```
 
-### GEM Tiers (Suprebets)
+### GEM Tiers
 
 | Tier | Score GEM | Condition |
 |------|-----------|-----------|
-| 🥇 Gold | ≥0.95 | calibration parfaite |
-| 🥈 Silver | ≥0.85 | haute confiance |
-| 🥉 Bronze | ≥0.75 | seuil minimum |
+| Gold | >= 0.95 | strongest candidate |
+| Silver | >= 0.85 | high confidence |
+| Bronze | >= 0.75 | minimum GEM tier |
 
 ### Commands
 
@@ -136,15 +165,17 @@ OUROBOROS_TELEGRAM_FEED=true
 ```
 
 Events notified:
-- ⏭️ **SKIP** - Pas assez de données
-- 🔥 **START** - Retrain commencé
-- ✅ **SUCCESS** - Retrain réussi
-- 🚨 **FAILED** - Erreur avec rollback
-- 🧪 **TEST** - Vérification
+- SKIP: not enough data or patience not met.
+- START: retrain started.
+- SUCCESS: retrain succeeded.
+- FAILED: retrain failed and rollback was attempted.
+- TEST: notification check.
+
+Current state: Ouroboros is configured and guarded, but `Autoimprovement ready` is expected to remain `no` until calibration is fitted and the learning readiness gate passes.
 
 ---
 
-## 📊 Reporting & Notifications
+## Reporting & Notifications
 
 Professionalized reporting via Telegram:
 - **Hourly Reports**: Summary of PnL, Drawdown, Drift, API Status, and Diversification.
@@ -154,39 +185,73 @@ Professionalized reporting via Telegram:
 
 ---
 
-## 🔬 Test Results
+## Current Operational Status
+
+Verified on 2026-04-25:
+
+- Telegram main channel: OK.
+- Telegram signal channel: OK.
+- Runtime process: `bot.py run --paper-on --signal-on --tui-off`.
+- Live trading: disabled.
+- Repository: pushed to `origin/main`.
 
 ### Dataset Status
 | Metric | Value |
 |--------|-------|
-| Total rows | 344 |
-| Resolved | 67 |
-| Decisions | 157 |
-| Historical | 180 |
+| Total rows | 361 |
+| Resolved rows | 74 |
+| Decision rows | 167 |
+| Readiness score | 58/100 |
+| Readiness label | monitor |
+| Ready for scoring fit | no |
+| Ready for live | no |
 
 ### Bot Commands
 | Command | Status | Detail |
 |---------|--------|--------|
-| `bot.py status` | ✅ | Balance: $9,827.96 |
-| `bot.py train` | ✅ | 500 samples, 20 cities |
-| `bot.py calibrate` | ✅ | 25 samples, Brier: 0.244 |
-| `bot.py ai-status` | ✅ | Groq OK, Autoimprovement ready |
-| `bot.py backfill --actuals` | ✅ | 20/40 récupérés |
-| `bot.py test` | ✅ | Telegram OK |
-| `bot.py ouroboros` | ✅ | Skip (patience=0) / Retrain |
+| `bot.py status` | OK | Balance: $9,879.24, 6 trades, 33% WR |
+| `bot.py test` | OK | Telegram main channel OK |
+| signal-channel test | OK | `TELEGRAM_SIGNAL_CHAT_ID` OK |
+| `bot.py ai-status` | OK | Groq OK, Autoimprovement not ready |
+| `bot.py data-qa` | OK | live gate currently no-go |
+| `bot.py learning-validation` | OK | readiness 58/100 |
+| `bot.py ranking-backtest` | OK | Top-K currently under benchmark |
+| `bot.py ouroboros` | OK | skip until patience/data conditions pass |
 
 ### Ouroboros State
 ```
-last_trained_rows: 344
-last_trained_resolved: 67
-retrain_count_today: 1
-last_retrain_date: 2026-04-24
-last_status: success
+Autoimprovement ready: no
+Calibration fitted: no
+Learning readiness: 58/100
+Expected action: skip until enough new resolutions exist
 ```
+
+### Long-Run Readiness
+
+The bot is suitable for a monitored 7-10 day paper/signal run if the host remains online:
+
+- process is already running in paper/signal mode,
+- `LIVE_TRADE=False`,
+- `logs/signal_bot.log` is not growing dangerously,
+- `data/` and `logs/` are ignored by Git,
+- Telegram alerts have been verified,
+- state/data writes are local JSON/JSONL files.
+
+Recommended monitoring during the run:
+
+```bash
+ps -ef | grep 'bot.py run'
+tail -n 100 logs/signal_bot.log
+./venv/bin/python bot.py status
+./venv/bin/python bot.py data-qa
+./venv/bin/python bot.py learning-validation
+```
+
+The live gate should not be opened until `ready_for_live: yes`, `Autoimprovement ready: yes`, and the ranking backtest is not negative versus benchmark.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 weatherbot/
@@ -225,6 +290,7 @@ weatherbot/
 │   │   ├── engine.py
 │   │   ├── scanner.py
 │   │   ├── resolver.py
+│   │   ├── execution.py
 │   │   └── health.py
 │   ├── weather/
 │   │   ├── config.py
@@ -249,32 +315,34 @@ weatherbot/
 
 ---
 
-## 🗺 Roadmap v1.0
-- [x] **Ouroboros Loop**: Automatic self-improvement
-- [x] **Meteostat Fallback**: Secondary historical data
-- [x] **Open-Meteo Archive**: Free historical temps
-- [ ] **Adaptive Calibration**: Real-time weight adjustment
-- [ ] **Cross-Asset Hedging**: Integrated hedging strategies
+## Roadmap
+- [x] Ouroboros loop with lock, backup, rollback and guarded retraining.
+- [x] Polymarket CLOB orderbook pricing for executable bid/ask.
+- [x] Telegram main and signal-channel notifications.
+- [x] Open-Meteo archive and Meteostat fallback for actual temperatures.
+- [ ] Fit and validate calibration after enough resolved rows.
+- [ ] Improve ranking until Top-K outperforms naive/random baselines.
+- [ ] Run 30-60 days of monitored paper trading before any live exposure.
 
 ---
 
-## ⚠️ Disclaimer & Legal
+## Disclaimer
 
 **WeatherBot** est un système de trading quantitatif expérimental conçu à des fins éducatives et de recherche.
 
 ### Limitations
-- **Pas de conseil financier** : Ce systeme ne constitue pas un conseil en investissement
-- **Paper Trading uniquement** : En mode live, n'utilisez que du capital que vous pouvez vous permettre de perdre
-- **Risque de perte** : Les marchés predictionnels comportent des risques significatifs
-- **Validation requise** : Au minimum 30-60 jours de validation empirique avant tout capital réel
+- **Pas de conseil financier** : ce systeme ne constitue pas un conseil en investissement.
+- **Paper Trading actuellement** : le mode live est volontairement bloque par des garde-fous.
+- **Risque de perte** : les marches predictionnels comportent des risques significatifs.
+- **Validation requise** : au minimum 30-60 jours de validation empirique avant tout capital reel.
 
 ### Responsibility
 - L'utilisateur est seul responsable de ses décisions de trading
 - Les performances passées ne garantissent pas les résultats futurs
 - Aucune garantie expresse ou implicite
 
-###对本システム
-Ce système est actuellement en **phase de validation Paper Trading**. Il est conçu à des fins éducatives et de recherche. Aucun capital ne doit être engagé sans un minimum de 30-60 jours de validation empirique sous conditions surveillées.
+### Etat actuel
+Ce systeme est actuellement en phase de validation paper trading. Aucun capital ne doit etre engage sans donnees resolues suffisantes, calibration fitted, backtest robuste et validation operationnelle prolongee.
 
 *Ce projet est distribué tel quel, sans garantie d'aucune sorte.*
 

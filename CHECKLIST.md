@@ -15,14 +15,18 @@ Ce document définit les critères de passage du mode Paper au mode Live. Les cr
 - [x] **Stress Testing** : Simulation de chocs de liquidité et de scénarios "Black Swan".
 
 ## 3. Critères Go/No-Go (Validation Empirique)
-*Ces critères doivent être maintenus sur une période de 30 à 60 jours en Paper Trading.*
+*Ces critères doivent être maintenus sur une période de 30 à 60 jours en Paper Trading. Etat actuel au 2026-04-25 : No-Go live.*
 
-- [ ] **Volume** : > 100 trades résolus en conditions réelles (Paper).
+- [ ] **Volume dataset** : >= 200 décisions et >= 200 lignes résolues.
+- [ ] **Volume trading** : > 100 trades résolus en conditions réelles (Paper).
 - [ ] **Profit Factor** : > 1.20 (net de frais et slippage simulés).
 - [ ] **Max Drawdown** : < 10% du capital total alloué.
 - [ ] **Stabilité Opérationnelle** : Uptime > 99.5% sur 30 jours glissants.
 - [ ] **Drift Monitoring** : Statut "Stable" sur les 7 derniers jours glissants.
 - [ ] **Significativité** : P-value < 0.05 sur l'outperformance du benchmark.
+- [ ] **Calibration** : `calibration_fitted=yes` et Brier/LogLoss acceptés en holdout.
+- [ ] **Ouroboros** : `Autoimprovement ready=yes` avec retrain/rollback validés.
+- [ ] **Backtest ranking** : Top-K non négatif face aux benchmarks naïf et aléatoire.
 
 ## 4. Chantiers Prioritaires (v3.0)
 - [ ] Clusters de risque appris (K-means sur résidus).
