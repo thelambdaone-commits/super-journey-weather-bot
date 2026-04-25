@@ -12,16 +12,22 @@ REGIONAL_CLUSTERS = {
     "LATAM": {"sao_paulo", "buenos_aires"}
 }
 
+from .risk_clusters import get_cluster_mapping
+
 class PortfolioRiskManager:
     """
     Manages global risk across all cities and horizons.
-    Prevents concentration risk and regional clustering.
+    Prevents concentration risk and regional/learned clustering.
     """
     def __init__(self, config):
         self.config = config
         self.max_exposure_per_city = getattr(config, "max_exposure_per_city", 100.0)
         self.max_exposure_per_region = getattr(config, "max_exposure_per_region", 250.0)
+        self.max_exposure_per_cluster = getattr(config, "max_exposure_per_cluster", 300.0)
         self.max_total_exposure = getattr(config, "max_total_exposure", 1000.0)
+        
+        # Load learned clusters (residual-based)
+        self.learned_clusters = get_cluster_mapping(getattr(config, "data_dir", "data"))
 
     def get_region(self, city_slug: str) -> str:
         for region, cities in REGIONAL_CLUSTERS.items():
@@ -31,25 +37,35 @@ class PortfolioRiskManager:
 
     def check_new_trade(self, city: str, cost: float, open_markets: List[Any]) -> Dict[str, Any]:
         """
-        Check if a new trade complies with regional and city limits.
+        Check if a new trade complies with regional, cluster and city limits.
         """
+        active_pos = [m for m in open_markets if m.position and m.position.get("status") == "open"]
+        
         # 1. Total Exposure
-        total_open = sum(m.position.get("cost", 0) for m in open_markets if m.position and m.position.get("status") == "open")
+        total_open = sum(m.position.get("cost", 0) for m in active_pos)
         if total_open + cost > self.max_total_exposure:
             return {"allowed": False, "reason": f"total_exposure_limit ({total_open + cost:.2f} > {self.max_total_exposure})"}
 
         # 2. City Concentration
-        city_open = sum(m.position.get("cost", 0) for m in open_markets if m.city == city and m.position and m.position.get("status") == "open")
+        city_open = sum(m.position.get("cost", 0) for m in active_pos if m.city == city)
         if city_open + cost > self.max_exposure_per_city:
             return {"allowed": False, "reason": f"city_concentration_limit ({city_open + cost:.2f} > {self.max_exposure_per_city})"}
 
         # 3. Regional Concentration (Hidden Correlation Defense)
         region = self.get_region(city)
-        region_open = sum(m.position.get("cost", 0) for m in open_markets if self.get_region(m.city) == region and m.position and m.position.get("status") == "open")
+        region_open = sum(m.position.get("cost", 0) for m in active_pos if self.get_region(m.city) == region)
         if region_open + cost > self.max_exposure_per_region:
             return {"allowed": False, "reason": f"regional_concentration_limit ({region}: {region_open + cost:.2f} > {self.max_exposure_per_region})"}
 
+        # 4. Learned Cluster Concentration (Advanced Correlation Defense)
+        cluster_id = self.learned_clusters.get(city)
+        if cluster_id is not None:
+            cluster_open = sum(m.position.get("cost", 0) for m in active_pos if self.learned_clusters.get(m.city) == cluster_id)
+            if cluster_open + cost > self.max_exposure_per_cluster:
+                return {"allowed": False, "reason": f"cluster_concentration_limit (Cluster {cluster_id}: {cluster_open + cost:.2f} > {self.max_exposure_per_cluster})"}
+
         return {"allowed": True, "reason": "ok"}
+
 
     def get_risk_summary(self, open_markets: List[Any]) -> Dict[str, Any]:
         """Return a snapshot of current portfolio risk."""

@@ -6,21 +6,18 @@ from pathlib import Path
 from typing import Optional
 
 
+from src.ml.registry import ModelRegistry
+
 class PipelineRunner:
-    """Runs the ML pipeline commands."""
+    """Runs the ML pipeline commands and manages versioning."""
     
     def __init__(self, timeout: int = 300):
         self.timeout = timeout
+        self.registry = ModelRegistry()
     
     def run(self, command: str) -> tuple[bool, str]:
         """
         Run a single pipeline command.
-        
-        Args:
-            command: "train", "calibrate", or "ai-status"
-            
-        Returns:
-            (success: bool, output: str)
         """
         cmd_map = {
             "train": ["python", "bot.py", "train"],
@@ -43,11 +40,7 @@ class PipelineRunner:
             )
             
             output = result.stdout + result.stderr
-            
-            if result.returncode == 0:
-                return True, output
-            else:
-                return False, output
+            return (result.returncode == 0), output
                 
         except subprocess.TimeoutExpired:
             return False, f"Timeout après {self.timeout}s"
@@ -56,27 +49,39 @@ class PipelineRunner:
     
     def run_full_pipeline(self) -> tuple[bool, dict]:
         """
-        Run full pipeline: train -> calibrate -> ai-status
-        
-        Returns:
-            (success: bool, results: dict)
+        Run full pipeline: train -> calibrate -> registry update.
         """
         results = {}
         
-        # Train
+        # 1. Train
         success, output = self.run("train")
-        results["train"] = {"success": success, "output": output[:500] if output else ""}
+        results["train"] = {"success": success, "output": output[:500]}
         if not success:
             return False, results
         
-        # Calibrate
+        # 2. Calibrate
         success, output = self.run("calibrate")
-        results["calibrate"] = {"success": success, "output": output[:500] if output else ""}
+        results["calibrate"] = {"success": success, "output": output[:500]}
         if not success:
             return False, results
-        
-        # AI Status (optional check)
-        success, output = self.run("ai-status")
-        results["ai-status"] = {"success": success, "output": output[:500] if output else ""}
+
+        # 3. Governance: Register the new version
+        try:
+            # Extract basic metrics from output if possible (placeholder)
+            # In a real v3.0, bot.py train would return JSON metrics
+            metrics = {"status": "success", "source": "ouroboros_auto"}
+            data_hash = "sha256_" + str(hash(output))[:12] # Simple hash for demo
+            
+            version = self.registry.register_model(
+                model_path="data/ml_model.json",
+                metrics=metrics,
+                data_hash=data_hash
+            )
+            results["registry"] = {"success": True, "version": version}
+        except Exception as e:
+            results["registry"] = {"success": False, "error": str(e)}
+
+        # 4. Optional diagnostics
+        self.run("ai-status")
         
         return True, results
