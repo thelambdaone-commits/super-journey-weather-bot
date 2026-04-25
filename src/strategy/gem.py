@@ -175,25 +175,35 @@ class GEMDetector:
         # Check exclusions
         is_excluded, reason = self.is_excluded(question, [{"spread": spread, "volume": volume}])
         if is_excluded:
-            return False, reason
+            # Map technical reasons to human-readable French
+            mapping = {
+                "empty_question": "Question vide",
+                "no_outcomes": "Aucun résultat",
+                "spread_too_high": f"Spread trop élevé ({spread:.1%})",
+                "volume_too_low": f"Volume insuffisant (${volume:,.0f})",
+            }
+            if "excluded_pattern" in reason:
+                mapping[reason] = f"Modèle exclu ({reason.split(':')[-1]})"
+            
+            return False, mapping.get(reason, reason)
         
         # Calculate divergence
         divergence = self.calc_divergence(model_probability, market_price)
         
         # Strict thresholds
         if net_ev < self.min_ev:
-            return False, f"net_ev_too_low:{net_ev:.1%}"
+            return False, f"Edge insuffisant ({net_ev:.1%})"
         
         if spread > self.max_spread:
-            return False, f"spread_too_high:{spread:.1%}"
+            return False, f"Spread trop large ({spread:.1%})"
         
         if divergence < self.min_divergence:
-            return False, f"divergence_too_low:{divergence:.1%}"
+            return False, f"Divergence trop faible ({divergence:.1%})"
         
         if confidence < self.min_confidence:
-            return False, f"confidence_too_low:{confidence:.0%}"
+            return False, f"Confiance trop basse ({confidence:.0%})"
         
-        return True, "gem_valid"
+        return True, "Signal GEM validé"
     
     def get_thresholds(self) -> dict:
         """Get current GEM thresholds."""
