@@ -176,16 +176,23 @@ class GEMDetector:
         is_excluded, reason = self.is_excluded(question, [{"spread": spread, "volume": volume}])
         if is_excluded:
             # Map technical reasons to human-readable French
-            mapping = {
-                "empty_question": "Question vide",
-                "no_outcomes": "Aucun résultat",
-                "spread_too_high": f"Spread trop élevé ({spread:.1%})",
-                "volume_too_low": f"Volume insuffisant (${volume:,.0f})",
-            }
-            if "excluded_pattern" in reason:
-                mapping[reason] = f"Modèle exclu ({reason.split(':')[-1]})"
+            if reason.startswith("volume_too_low"):
+                val = reason.split(":")[-1]
+                display_reason = f"Volume insuffisant (${val})"
+            elif reason.startswith("spread_too_high"):
+                val = reason.split(":")[-1]
+                display_reason = f"Spread trop élevé ({val})"
+            elif "excluded_pattern" in reason:
+                val = reason.split(":")[-1]
+                display_reason = f"Modèle exclu ({val})"
+            else:
+                mapping = {
+                    "empty_question": "Question vide",
+                    "no_outcomes": "Aucun résultat",
+                }
+                display_reason = mapping.get(reason, reason)
             
-            return False, mapping.get(reason, reason)
+            return False, display_reason
         
         # Calculate divergence
         divergence = self.calc_divergence(model_probability, market_price)
