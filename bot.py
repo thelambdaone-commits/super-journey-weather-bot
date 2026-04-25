@@ -205,7 +205,15 @@ def force_resolve_all() -> int:
 def send_test_message() -> bool:
     """Send a test message to Telegram."""
     notifier = get_notifier()
-    result = notifier.send("🔔 *WeatherBot* test message\n\nBot is working! ✅")
+    result = notifier.send(
+        "🔔 *WEATHERBOT DIAGNOSTIC*\n"
+        "──────────────\n"
+        "📡 *TEST DE CONNEXION*\n"
+        "→ Statut: `Opérationnel`\n"
+        "→ Latence: `Active`\n"
+        "──────────────\n"
+        "✅ *Bot is working perfectly!*"
+    )
     print(f"Telegram test: {'OK' if result else 'FAILED'}")
     return result
 
