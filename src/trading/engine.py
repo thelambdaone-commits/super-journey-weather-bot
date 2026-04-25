@@ -27,6 +27,7 @@ from .health import get_api_statuses, render_api_statuses
 from .scanner import MarketScanner
 from .resolver import MarketResolver
 from .paper_account import PaperAccount
+from .execution import ClobExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class TradingEngine:
         self.scanner = MarketScanner(self)
         self.resolver = MarketResolver(self)
         self.paper_account = PaperAccount(config.data_dir)
+        self.executor = ClobExecutor(config)
         self.running = True
         self.start_time = time.time()
         
@@ -147,6 +149,11 @@ class TradingEngine:
                 self.emit("   Add to .env: LIVE_TRADE_CONFIRM=true")
                 self.emit("   This is a safety guard to prevent accidental live trading.")
                 return
+            readiness_error = self.executor.readiness_error()
+            if readiness_error:
+                self.emit(f"🚨 BLOCKED: CLOB executor is not ready: {readiness_error}")
+                self.emit("   Install py-clob-client and set POLYMARKET_PRIVATE_KEY before enabling live trading.")
+                return
         
         self.emit(f"\n{'='*50}")
         self.emit(f"WEATHERBOT ({bot_mode_label(self.modes)})")
@@ -234,8 +241,8 @@ class TradingEngine:
                 candidate["horizon"], signal["question"], signal["market_id"], candidate["note"],
                 calibrated_prob=signal["p"], market_prob=signal["entry_price"],
                 uncertainty=signal.get("edge_penalties", {}).get("uncertainty"),
-                signal_type=candidate["filter_decision"].signal_type,
-                quality=ranked_item.score, priority=candidate["filter_decision"].priority,
+                signal_type=candidate["filter_decision"]["signal_type"],
+                quality=ranked_item.score, priority=candidate["filter_decision"]["priority"],
                 emoji=candidate["filter_decision"].get("emoji", "🌡️"),
                 confidence_score=signal.get("ml", {}).get("confidence"),
                 source_bias=signal.get("ml", {}).get("bias"),
@@ -286,11 +293,12 @@ class TradingEngine:
         state = self.storage.load_state()
         markets = self.storage.load_all_markets()
         open_pos = [m for m in markets if m.position and m.position.get("status") == "open"]
-        resolved = [m for m in markets if m.status == "resolved"]
+        resolved = [m for m in markets if m.status == "resolved" and m.pnl is not None]
         balance, start = state.balance, state.starting_balance
         ret = (balance - start) / start * 100 if start else 0
-        wins, losses = state.wins, state.losses
-        total = max(state.total_trades, len(open_pos) + len(resolved), wins + losses)
+        wins = sum(1 for m in resolved if m.resolved_outcome == "win")
+        losses = sum(1 for m in resolved if m.resolved_outcome == "loss")
+        total = len(open_pos) + len(resolved)
         wr = f"{wins/total*100:.0f}%" if total else "0%"
 
         return [

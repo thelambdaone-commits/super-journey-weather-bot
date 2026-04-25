@@ -118,11 +118,18 @@ class Storage:
         return self.markets_dir / f"{city}_{date}.json"
     
     def load_market(self, city: str, date: str) -> Optional[Market]:
-        """Load market data."""
+        """Load market data with field filtering."""
         path = self.market_path(city, date)
         if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return Market(**data)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                import dataclasses
+                fields = {f.name for f in dataclasses.fields(Market)}
+                filtered = {k: v for k, v in data.items() if k in fields}
+                return Market(**filtered)
+            except Exception as e:
+                print(f"Error loading market {city}_{date}: {e}")
+                return None
         return None
     
     def save_market(self, market: Market):
@@ -133,12 +140,15 @@ class Storage:
         _atomic_write(path, content, encoding="utf-8")
     
     def load_all_markets(self) -> List[Market]:
-        """Load all markets."""
+        """Load all markets with field filtering."""
+        import dataclasses
+        fields = {f.name for f in dataclasses.fields(Market)}
         markets = []
         for f in self.markets_dir.glob("*.json"):
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
-                markets.append(Market(**data))
+                filtered = {k: v for k, v in data.items() if k in fields}
+                markets.append(Market(**filtered))
             except Exception:
                 pass
         return markets

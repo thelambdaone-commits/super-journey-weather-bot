@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import analyze_forecast, check_anomaly, get_groq_client
 from ..data.loader import load_rows
+from ..data.learning import run_learning_validation
 from ..ml import load_model
 from ..probability.calibration import CalibrationEngine
 from ..weather.locations import LOCATIONS
@@ -33,6 +34,9 @@ class AIDiagnosticsReport:
     probe_analysis: str | None
     probe_recommendation: str | None
     probe_anomaly: bool
+    readiness_score: int
+    readiness_label: str
+    readiness_notes: list[str]
 
 
 def _probe_groq() -> tuple[bool, str, dict | None]:
@@ -66,7 +70,13 @@ def run_ai_diagnostics(data_dir: str = "data") -> AIDiagnosticsReport:
     model_cities = int(model.get("cities", 0)) if model else 0
     calibration_fitted = bool(calibrator.fitted)
     feedback_loop_active = bool(rows and model_loaded and resolved_rows > 0 and decision_rows > 0)
-    autoimprovement_ready = bool(feedback_loop_active and calibration_loaded)
+    learning = run_learning_validation(data_dir)
+    autoimprovement_ready = bool(
+        feedback_loop_active
+        and calibration_loaded
+        and calibration_fitted
+        and learning.ready_for_scoring_fit
+    )
 
     return AIDiagnosticsReport(
         groq_available=get_groq_client() is not None,
@@ -85,6 +95,9 @@ def run_ai_diagnostics(data_dir: str = "data") -> AIDiagnosticsReport:
         probe_analysis=None if not groq_payload else groq_payload.get("analysis"),
         probe_recommendation=None if not groq_payload else groq_payload.get("recommendation"),
         probe_anomaly=bool(groq_payload and groq_payload.get("anomaly", {}).get("is_anomaly")),
+        readiness_score=learning.learning_readiness_score,
+        readiness_label=learning.readiness_label,
+        readiness_notes=learning.notes,
     )
 
 
@@ -103,6 +116,9 @@ def format_ai_diagnostics(report: AIDiagnosticsReport) -> list[str]:
     lines.append(f"Calibration fitted: {'yes' if report.calibration_fitted else 'no'}")
     lines.append(f"Feedback loop active: {'yes' if report.feedback_loop_active else 'no'}")
     lines.append(f"Autoimprovement ready: {'yes' if report.autoimprovement_ready else 'no'}")
+    lines.append(f"Learning readiness: {report.readiness_score}/100 ({report.readiness_label})")
+    if report.readiness_notes:
+        lines.append("Readiness notes: " + ", ".join(report.readiness_notes))
     if report.probe_analysis:
         lines.append(f"Groq analysis: {report.probe_analysis}")
     if report.probe_recommendation:

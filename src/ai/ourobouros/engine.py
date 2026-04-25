@@ -44,6 +44,7 @@ class OuroborosEngine:
             self.config.min_resolutions,
             self.config.min_dataset_rows,
             self.config.patience,
+            self.config.max_retrain_per_day,
         )
         self.pipeline = PipelineRunner(self.config.timeout)
         self.notifier = OuroborosNotifier()
@@ -80,6 +81,7 @@ class OuroborosEngine:
             # Update pending resolutions
             self.state["pending_resolutions"] = new_resolutions
             self.state["resolved_count"] = resolved_rows
+            self.state["dataset_rows"] = dataset_rows
             
             # 3. Decision: should we retrain?
             should_train, reason = self.decision.should_retrain(
@@ -174,9 +176,9 @@ class OuroborosEngine:
             for line in f:
                 try:
                     row = json.loads(line)
-                    if row.get("actual_temp") is not None:
+                    if row.get("actual_temp") is not None or row.get("resolution_outcome") in {"win", "loss"}:
                         count += 1
-                except:
+                except Exception:
                     pass
         return count
     

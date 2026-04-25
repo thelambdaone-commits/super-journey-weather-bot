@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+CLOB_HOST = "https://clob.polymarket.com"
+
 
 def get_polymarket_event(city_slug: str, month: str, day: int, year: int) -> Optional[Dict]:
     """Get Polymarket event for city/date."""
@@ -39,6 +41,85 @@ def get_market(market_id: str) -> Optional[Dict]:
     except Exception as e:
         logger.error(f"Error fetching Polymarket market {market_id}: {e}")
         return None
+
+
+def _as_float(value, default: float | None = None) -> float | None:
+    """Parse numeric API fields without letting malformed values leak into pricing."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def get_orderbook(token_id: str) -> Optional[Dict]:
+    """Fetch the CLOB orderbook for one outcome token."""
+    if not token_id:
+        return None
+    try:
+        response = requests.get(
+            f"{CLOB_HOST}/book",
+            params={"token_id": str(token_id)},
+            timeout=(3, 5),
+        )
+        if not response.ok:
+            logger.warning("CLOB book unavailable for token %s: HTTP %s", token_id, response.status_code)
+            return None
+        data = response.json()
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception as exc:
+        logger.warning("Error fetching CLOB book for token %s: %s", token_id, exc)
+        return None
+
+
+def refresh_outcome_orderbook(outcome: Dict) -> bool:
+    """
+    Replace indicative Gamma prices with executable CLOB bid/ask.
+
+    Gamma's outcomePrices are display/implied prices, not an executable spread.
+    Trading decisions must use the YES token orderbook: best ask to buy, best bid
+    to mark/exit, and ask-bid spread for liquidity/friction filters.
+    """
+    book = get_orderbook(str(outcome.get("token_id") or ""))
+    if not book:
+        outcome["orderbook_status"] = "missing"
+        return False
+
+    bids = book.get("bids") or []
+    asks = book.get("asks") or []
+    bid_prices = [_as_float(level.get("price")) for level in bids if isinstance(level, dict)]
+    ask_prices = [_as_float(level.get("price")) for level in asks if isinstance(level, dict)]
+    bid_prices = [price for price in bid_prices if price is not None]
+    ask_prices = [price for price in ask_prices if price is not None]
+
+    if not bid_prices or not ask_prices:
+        outcome["orderbook_status"] = "empty_side"
+        return False
+
+    best_bid = max(bid_prices)
+    best_ask = min(ask_prices)
+    if best_bid <= 0 or best_ask <= 0 or best_bid > best_ask:
+        outcome["orderbook_status"] = "invalid_crossed"
+        return False
+
+    midpoint = (best_bid + best_ask) / 2
+    bid_size = next((_as_float(level.get("size"), 0.0) for level in bids if _as_float(level.get("price")) == best_bid), 0.0)
+    ask_size = next((_as_float(level.get("size"), 0.0) for level in asks if _as_float(level.get("price")) == best_ask), 0.0)
+
+    outcome.update({
+        "bid": round(best_bid, 4),
+        "ask": round(best_ask, 4),
+        "price": round(midpoint, 4),
+        "spread": round(best_ask - best_bid, 4),
+        "best_bid_size": round(float(bid_size or 0.0), 4),
+        "best_ask_size": round(float(ask_size or 0.0), 4),
+        "last_trade_price": _as_float(book.get("last_trade_price")),
+        "tick_size": _as_float(book.get("tick_size")),
+        "min_order_size": _as_float(book.get("min_order_size")),
+        "orderbook_status": "ok",
+    })
+    return True
 
 
 def check_market_resolved(market_id: str) -> Optional[bool]:
@@ -131,13 +212,16 @@ def get_outcomes(event: Dict) -> List[Dict]:
             prices = json.loads(prices_str)
             if not isinstance(prices, list) or len(prices) < 1:
                 continue
-            # outcomePrices = [YES_price, NO_price]
+            token_ids = json.loads(market.get("clobTokenIds", "[]"))
+            yes_token_id = str(token_ids[0]) if token_ids else ""
+            # Gamma outcomePrices are indicative/display prices. They are kept as
+            # fallbacks only; executable bid/ask is loaded from the CLOB orderbook
+            # by refresh_outcome_orderbook before any trading decision.
             yes_price = float(prices[0])
             no_price = float(prices[1]) if len(prices) > 1 else 0.5
-            # DEFINE ask/bid before using them
             ask = yes_price
-            bid = no_price
-            spread = max(0.0, ask - bid)
+            bid = yes_price
+            spread = 1.0
         except (json.JSONDecodeError, ValueError, IndexError) as e:
             logger.error(f"Skipping market {mid} due to price error: {e}")
             continue
@@ -145,6 +229,7 @@ def get_outcomes(event: Dict) -> List[Dict]:
         outcomes.append({
             "question": question,
             "market_id": mid,
+            "token_id": yes_token_id,
             "range": rng,
             "yes_price": round(yes_price, 4),
             "no_price": round(no_price, 4),

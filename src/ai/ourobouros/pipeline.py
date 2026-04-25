@@ -2,6 +2,7 @@
 Ouroboros pipeline runner - executes train/calibrate/ai-status.
 """
 import subprocess
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +47,18 @@ class PipelineRunner:
             return False, f"Timeout après {self.timeout}s"
         except Exception as e:
             return False, str(e)
+
+    def _stable_data_hash(self) -> str:
+        """Hash model inputs/outputs deterministically for registry provenance."""
+        digest = hashlib.sha256()
+        for rel_path in ("data/dataset_rows.jsonl", "data/ml_model.json", "data/calibration.pkl"):
+            path = Path(rel_path)
+            digest.update(rel_path.encode("utf-8"))
+            if path.exists():
+                digest.update(path.read_bytes())
+            else:
+                digest.update(b"<missing>")
+        return "sha256_" + digest.hexdigest()[:16]
     
     def run_full_pipeline(self) -> tuple[bool, dict]:
         """
@@ -70,7 +83,7 @@ class PipelineRunner:
             # Extract basic metrics from output if possible (placeholder)
             # In a real v3.0, bot.py train would return JSON metrics
             metrics = {"status": "success", "source": "ouroboros_auto"}
-            data_hash = "sha256_" + str(hash(output))[:12] # Simple hash for demo
+            data_hash = self._stable_data_hash()
             
             version = self.registry.register_model(
                 model_path="data/ml_model.json",
@@ -80,6 +93,7 @@ class PipelineRunner:
             results["registry"] = {"success": True, "version": version}
         except Exception as e:
             results["registry"] = {"success": False, "error": str(e)}
+            return False, results
 
         # 4. Optional diagnostics
         self.run("ai-status")

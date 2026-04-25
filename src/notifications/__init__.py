@@ -75,7 +75,7 @@ class TelegramNotifier:
         target_chat_id = chat_id or self.chat_id
         if not self.token or not target_chat_id:
             return False
-        
+
         url = f"https://api.telegram.org/bot{self.token}/deleteMessage"
         payload = {
             "chat_id": target_chat_id,
@@ -92,7 +92,7 @@ class TelegramNotifier:
         target_chat_id = chat_id or self.chat_id
         if not self.token or not target_chat_id:
             return None
-        
+
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {
             "chat_id": target_chat_id,
@@ -117,19 +117,26 @@ class TelegramNotifier:
     
     def notify_trade_open(self, city: str, date: str, bucket: str, price: float, 
                        ev: float, cost: float, source: str, ai_note: str = "") -> bool:
-        """Notify trade opened."""
+        """Notify trade opened with premium layout."""
+        is_live = "🛡️ **TP ACTIF / STOP SURVEILLÉ**" in ai_note or "BRACKETS" in ai_note
+        header = "⚡ **EXÉCUTION LIVE CLOB**" if is_live else "🚀 **TRADE SIMULÉ OUVERT**"
+
         msg = (
-            f"🚀 **TRADE OUVERT**\n\n"
-            f"📍 **Ville:** {city}\n"
+            f"{header}\n"
+            f"──────────────\n"
+            f"📍 **Ville:** {city.upper()}\n"
             f"📅 **Date:** {date}\n"
             f"📦 **Bucket:** `{bucket}`\n"
-            f"💰 **Prix:** `${price:.3f}`\n"
-            f"⚡ **EV:** `+{ev:.2f}`\n"
-            f"💵 **Mise:** `${cost:.2f}`\n"
+            f"──────────────\n"
+            f"📊 **DÉTAILS FINANCIERS**\n"
+            f"→ Prix Entrée: `${price:.3f}`\n"
+            f"→ Edge (EV): `+{ev:.2f}`\n"
+            f"→ Mise Totale: `${cost:.2f}`\n"
+            f"──────────────\n"
             f"📡 **Source:** {source.upper()}"
         )
         if ai_note:
-            msg += f"\n\n__ {ai_note.strip()} __"
+            msg += f"\n\n📝 **NOTE D'EXÉCUTION**\n__ {ai_note.strip()} __"
         return self.send(msg, parse_mode="Markdown")
 
     def notify_signal(self, city: str, date: str, bucket: str, price: float, 

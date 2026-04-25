@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, List
 from ..weather.apis import get_forecasts
 from ..weather.locations import LOCATIONS, MONTHS
 from ..weather.math import bucket_prob, in_bucket
-from .polymarket import get_polymarket_event, get_outcomes, hours_to_resolution, check_market_resolved
+from .polymarket import (
+    get_polymarket_event,
+    get_outcomes,
+    hours_to_resolution,
+    check_market_resolved,
+    refresh_outcome_orderbook,
+)
 from .trade_builder import build_trade_payload
 from ..strategy.filters import should_skip_outcome
 from ..strategy.sizing import size_position
@@ -113,7 +119,8 @@ class MarketScanner:
                     current_price = None
                     for outcome in outcomes:
                         if outcome["market_id"] == pos["market_id"]:
-                            current_price = outcome.get("bid", outcome["price"])
+                            if refresh_outcome_orderbook(outcome):
+                                current_price = outcome.get("bid", outcome["price"])
                             break
 
                     if current_price is not None:
@@ -122,6 +129,31 @@ class MarketScanner:
                         if current_price >= entry * 1.20 and stop < entry:
                             pos["stop_price"] = entry
                         if current_price <= stop:
+                            if self.engine.modes.live_trade and pos.get("token_id"):
+                                tp_order_id = (
+                                    pos.get("tp_order_id")
+                                    or pos.get("execution", {}).get("tp_order_id")
+                                )
+                                cancel_res = self.engine.executor.cancel_order(tp_order_id)
+                                if not cancel_res.get("success"):
+                                    self.engine.emit(
+                                        f"[LIVE-STOP-ERROR] {loc.name} {date_str} | "
+                                        f"TP cancel failed: {cancel_res.get('reason')}"
+                                    )
+                                    continue
+                                pos["tp_cancel"] = cancel_res
+
+                                close_res = self.engine.executor.close_position_market(
+                                    token_id=pos["token_id"],
+                                    size=pos.get("shares", 0),
+                                )
+                                if not close_res.get("success"):
+                                    self.engine.emit(
+                                        f"[LIVE-STOP-ERROR] {loc.name} {date_str} | {close_res.get('reason')}"
+                                    )
+                                    continue
+                                pos["close_order_id"] = close_res.get("order")
+
                             pnl = round((current_price - entry) * pos["shares"], 2)
                             balance += pos["cost"] + pnl
                             pos.update({
@@ -178,12 +210,44 @@ class MarketScanner:
                                     note = format_ai_note(signal.get("ai")) + format_ml_note(signal.get("ml"))
                                     
                                     if self.engine.modes.live_trade:
-                                        balance -= signal["cost"]
-                                        market.position = signal
-                                        state.total_trades += 1
-                                        result.new_trades += 1
-                                        self.engine.feedback.notify_trade_open(loc.name, date_str, f"{signal['bucket_low']}-{signal['bucket_high']}{unit_sym}", signal["entry_price"], signal["ev"], signal["cost"], signal["forecast_src"], note)
-                                        self.engine.emit(f"[BUY] {loc.name} | ${signal['entry_price']:.3f} | EV {signal['ev']:+.2f}")
+                                        # Real Execution via CLOB
+                                        if not signal.get("token_id"):
+                                            self.engine.emit(f"[LIVE-ERROR] {loc.name} | token_id CLOB manquant")
+                                            continue
+
+                                        exec_res = self.engine.executor.place_bracket_order(
+                                            token_id=signal["token_id"],
+                                            side="BUY",
+                                            price=signal["entry_price"],
+                                            size=signal["cost"] / signal["entry_price"]
+                                        )
+
+                                        if exec_res.get("success"):
+                                            signal["execution"] = {
+                                                "buy_order_id": exec_res.get("buy_order"),
+                                                "tp_order_id": exec_res.get("tp_order"),
+                                                "stop_loss_mode": exec_res.get("stop_loss_mode"),
+                                                "status": exec_res.get("status"),
+                                            }
+                                            signal["tp_price"] = exec_res.get("tp_price")
+                                            signal["stop_price"] = exec_res.get("stop_price")
+                                            balance -= signal["cost"]
+                                            market.position = signal
+                                            state.total_trades += 1
+                                            result.new_trades += 1
+                                            self.engine.feedback.notify_trade_open(
+                                                loc.name, date_str, f"{signal['bucket_low']}-{signal['bucket_high']}{unit_sym}",
+                                                signal["entry_price"], signal["ev"], signal["cost"], signal["forecast_src"],
+                                                f"{note}\n🛡️ **TP ACTIF / STOP SURVEILLÉ** "
+                                                f"(TP {exec_res.get('tp_price')}, SL {exec_res.get('stop_price')})"
+                                            )
+                                            self.engine.emit(
+                                                f"[LIVE-BUY] {loc.name} | ${signal['entry_price']:.3f} | "
+                                                f"EV {signal['ev']:+.2f} | buy={exec_res.get('buy_order')} "
+                                                f"tp={exec_res.get('tp_order')} sl=synthetic"
+                                            )
+                                        else:
+                                            self.engine.emit(f"[LIVE-ERROR] {loc.name} | Échec exécution CLOB: {exec_res.get('reason')}")
 
                                 if self.engine.modes.paper_mode and should_emit_marker(market.paper_state, signal):
                                     log_paper_trade(loc.name, date_str, horizon, signal)
@@ -197,20 +261,18 @@ class MarketScanner:
                                     quality_result = self.engine.signal_quality.validate(sql_signal)
                                     
                                     if quality_result["accepted"]:
-                                        # Map quality result to filter_decision for backward compatibility
-                                        # We use a simple dict for legacy reasons in the pipeline
-                                        filter_decision = type('Decision', (), {
+                                        filter_decision = {
                                             "allowed": True,
-                                            "priority": "NORMAL", # Could be dynamic based on quality
+                                            "priority": "NORMAL",
                                             "emoji": "🌡️",
-                                            "signal_type": "edge-opportunity"
-                                        })
+                                            "signal_type": "edge-opportunity",
+                                        }
                                         
                                         trade_context = build_trade_payload(
                                             city=loc.name, date_str=date_str, horizon=horizon,
                                             bucket=f"{signal['bucket_low']}-{signal['bucket_high']}{unit_sym}",
                                             unit=unit_sym, signal=signal, question=signal["question"],
-                                            event_slug=event.get("slug"), priority=filter_decision.priority, emoji=filter_decision.emoji,
+                                            event_slug=event.get("slug"), priority=filter_decision["priority"], emoji=filter_decision["emoji"],
                                         )
                                         pending_signals.append({
                                             "market": market, "loc": loc, "date_str": date_str, "horizon": horizon,
@@ -240,6 +302,7 @@ class MarketScanner:
         forecast_temp = snap.get("best")
         best_source = snap.get("best_source")
         
+        best = None
         for candidate in outcomes:
             t_low, t_high = candidate["range"]
             estimate = self.engine.probability_engine.estimate_bucket(
@@ -247,23 +310,29 @@ class MarketScanner:
             )
             if not in_bucket(estimate.adjusted_temp, t_low, t_high):
                 continue
+
+            if not refresh_outcome_orderbook(candidate):
+                continue
             
             candidate_features = dict(base_features)
             candidate_features.update(self.engine.feature_engine.build(loc, snap, outcomes, hours, candidate))
+            candidate_features["confidence"] = estimate.confidence
             volume = candidate.get("volume", 0)
             current_edge = self.engine.edge_engine.compute(estimate.probability, candidate["ask"], candidate_features, best_source, volume)
             
             # Check should skip with stricter filters
             if should_skip_outcome(self.engine.config, candidate, candidate_features, current_edge.adjusted_ev):
                 continue
-            
-            return candidate, estimate, current_edge, candidate_features
-        return None
+
+            if best is None or current_edge.adjusted_ev > best[2].adjusted_ev:
+                best = (candidate, estimate, current_edge, candidate_features)
+        return best
 
     def build_signal(self, outcome, estimate, edge, features, kelly, size, forecast_temp, best_source):
         """Build a signal dictionary."""
         return {
             "market_id": outcome["market_id"],
+            "token_id": outcome.get("token_id"),
             "question": outcome["question"],
             "bucket_low": outcome["range"][0],
             "bucket_high": outcome["range"][1],

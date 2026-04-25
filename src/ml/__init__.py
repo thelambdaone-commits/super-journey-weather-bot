@@ -29,7 +29,7 @@ def _summarize(errors: list[float], unit: str) -> Dict[str, Any]:
     mae = sum(abs(e) for e in errors) / n
     bias = sum(errors) / n
     rmse = math.sqrt(sum(e * e for e in errors) / n)
-    sigma = max(default_sigma(unit) * 0.5, mae)
+    sigma = max(default_sigma(unit) * 0.75, mae, rmse)
     scale = 6.0 if unit == "F" else 3.0
     confidence = max(0.1, min(0.95, (1 - min(mae / scale, 0.85)) * min(1.0, n / 8)))
     return {
@@ -131,12 +131,16 @@ def score_forecast(
             "tier": "default",
         }
 
+    min_city_source_samples = 5
+    min_source_samples = 10
     city_key = f"{city}:{source}"
     stats = model.get("by_city_source", {}).get(city_key)
     tier = "city_source"
-    if not stats:
+    if not stats or int(stats.get("n", 0)) < min_city_source_samples:
         stats = model.get("by_source", {}).get(source)
         tier = "source"
+    if stats and int(stats.get("n", 0)) < min_source_samples:
+        stats = None
 
     if not stats:
         return {
@@ -149,13 +153,16 @@ def score_forecast(
             "tier": "default",
         }
 
-    bias = float(stats.get("bias", 0.0))
+    n = int(stats.get("n", 0))
+    confidence = float(stats.get("confidence", 0.2))
+    sample_shrink = min(1.0, n / 30.0)
+    bias = float(stats.get("bias", 0.0)) * sample_shrink
     return {
         "adjusted_temp": round(float(forecast_temp) - bias, 2),
         "sigma": float(stats.get("sigma", default_sigma(unit))),
-        "confidence": float(stats.get("confidence", 0.2)),
+        "confidence": round(max(0.1, min(0.95, confidence * sample_shrink)), 4),
         "bias": bias,
         "mae": float(stats.get("mae", default_sigma(unit))),
-        "n": int(stats.get("n", 0)),
+        "n": n,
         "tier": tier,
     }

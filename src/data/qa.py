@@ -66,6 +66,7 @@ class DataQARunner:
             "source_bias": self._source_bias(rows),
             "city_bias": self._city_bias(rows),
             "stability": self._stability_summary(rows),
+            "validation": self._validation_summary(rows),
         }
         return report
 
@@ -143,6 +144,26 @@ class DataQARunner:
             "low_liquidity_samples": low_liquidity,
         }
 
+    def _validation_summary(self, rows: list[DatasetRow]) -> dict:
+        """Return hard gates for live/statistical readiness."""
+        decisions = [row for row in rows if row.event_type == "decision"]
+        resolved = [row for row in rows if row.actual_temp is not None or row.resolution_outcome is not None]
+        decision_cities = {row.city for row in decisions}
+        resolution_cities = {row.city for row in resolved}
+        issues = []
+        if len(decisions) < 200:
+            issues.append("need_at_least_200_decisions")
+        if len(resolved) < 200:
+            issues.append("need_at_least_200_resolved_rows")
+        if len(decision_cities) < 10:
+            issues.append("need_at_least_10_decision_cities")
+        if len(resolution_cities) < 10:
+            issues.append("need_at_least_10_resolution_cities")
+        return {
+            "ready_for_live": not issues,
+            "issues": issues,
+        }
+
 
 def format_qa_report(report: dict) -> list[str]:
     """Render a compact CLI QA report."""
@@ -198,5 +219,11 @@ def format_qa_report(report: dict) -> list[str]:
     lines.append("Stability:")
     for key, value in stability.items():
         lines.append(f" - {key}: {value}")
+    validation = report.get("validation", {})
+    lines.append("")
+    lines.append("Validation gate:")
+    lines.append(f" - ready_for_live: {'yes' if validation.get('ready_for_live') else 'no'}")
+    for issue in validation.get("issues", []):
+        lines.append(f" - {issue}")
     lines.append(f"{'='*50}\n")
     return lines

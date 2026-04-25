@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from hashlib import sha1
+import math
 from pathlib import Path
 from random import Random
 from statistics import mean
@@ -158,11 +159,16 @@ class RankingBacktester:
         naive_pnls: list[float] = []
         eligible_snapshots = 0
 
-        # Walk-Forward: Sort groups by date to allow temporal split
-        sorted_keys = sorted(groups.keys())
-        split_idx = int(len(sorted_keys) * 0.7) # 70% Train / 30% Test
-        train_keys = sorted_keys[:split_idx]
-        test_keys = sorted_keys[split_idx:]
+        # Walk-forward over groups that can actually be scored. Splitting over
+        # unresolved future dates makes the report look like the model has zero
+        # eligible samples even when resolved decision cohorts exist.
+        sorted_keys = []
+        for key in sorted(groups.keys()):
+            paired_count = sum(1 for row in groups[key] if row.market_id in resolved)
+            if paired_count >= top_k:
+                sorted_keys.append(key)
+        split_idx = int(len(sorted_keys) * 0.7)
+        test_keys = sorted_keys[split_idx:] if len(sorted_keys) >= 3 else sorted_keys
         
         # We only report on Test (Out-of-Sample)
         for key in test_keys:

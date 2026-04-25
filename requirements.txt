@@ -12,3 +12,4 @@ pydantic==2.13.3
 httpx==0.28.1
 pytz==2023.4
 rich==15.0.0
+py-clob-client==0.34.6

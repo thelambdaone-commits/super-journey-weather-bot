@@ -13,10 +13,12 @@ class DecisionEngine:
         min_resolutions: int = 10,
         min_dataset_rows: int = 50,
         patience: int = 5,
+        max_retrain_per_day: int = 2,
     ):
         self.min_resolutions = min_resolutions
         self.min_dataset_rows = min_dataset_rows
         self.patience = patience
+        self.max_retrain_per_day = max_retrain_per_day
     
     def should_retrain(
         self,
@@ -38,12 +40,15 @@ class DecisionEngine:
             state["last_retrain_date"] = today
         
         # Check if locked out today
-        if state.get("retrain_count_today", 0) >= 2:
-            return False, f"Limite journalière atteinte ({state['retrain_count_today']}/2)"
+        if state.get("retrain_count_today", 0) >= self.max_retrain_per_day:
+            return False, (
+                f"Limite journalière atteinte "
+                f"({state['retrain_count_today']}/{self.max_retrain_per_day})"
+            )
         
-        # Load dataset stats
-        dataset_rows = state.get("last_trained_rows", 0)
-        resolved = state.get("last_trained_resolved", 0)
+        dataset_rows = state.get("dataset_rows", state.get("last_trained_rows", 0))
+        if dataset_rows < self.min_dataset_rows:
+            return False, f"Dataset insuffisant: {dataset_rows}/{self.min_dataset_rows} lignes"
         
         # Update GEM counts
         total_gems = gem_gold + gem_silver + gem_bronze
