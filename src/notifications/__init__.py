@@ -99,14 +99,14 @@ class TelegramNotifier:
                        ev: float, cost: float, source: str, ai_note: str = "") -> bool:
         """Notify trade opened."""
         msg = (
-            f"🚀 *TRADE OUVERT*\n\n"
-            f"📍 *Ville:* {city}\n"
-            f"📅 *Date:* {date}\n"
-            f"📦 *Bucket:* `{bucket}`\n"
-            f"💰 *Prix:* `${price:.3f}`\n"
-            f"⚡ *EV:* `+{ev:.2f}`\n"
-            f"💵 *Mise:* `${cost:.2f}`\n"
-            f"📡 *Source:* {source.upper()}"
+            f"🚀 **TRADE OUVERT**\n\n"
+            f"📍 **Ville:** {city}\n"
+            f"📅 **Date:** {date}\n"
+            f"📦 **Bucket:** `{bucket}`\n"
+            f"💰 **Prix:** `${price:.3f}`\n"
+            f"⚡ **EV:** `+{ev:.2f}`\n"
+            f"💵 **Mise:** `${cost:.2f}`\n"
+            f"📡 **Source:** {source.upper()}"
         )
         if ai_note:
             msg += f"\n\n_{ai_note.strip()}_"
@@ -154,52 +154,52 @@ class TelegramNotifier:
     def notify_bot_started(self, mode: str, cities: int, scan_minutes: int) -> bool:
         """Notify bot startup."""
         return self.send(
-            f"✅ *BOT DÉMARRÉ*\n\n"
-            f"⚙️ *Mode:* `{mode}`\n"
-            f"🏙️ *Villes:* `{cities}`\n"
-            f"⏱️ *Scan:* `{scan_minutes} min`\n"
-            f"📡 *Statut:* `Surveillance active`",
+            f"✅ **BOT DÉMARRÉ**\n\n"
+            f"⚙️ **Mode:** `{mode}`\n"
+            f"🏙️ **Villes:** `{cities}`\n"
+            f"⏱️ **Scan:** `{scan_minutes} min`\n"
+            f"📡 **Statut:** `Surveillance active`",
             parse_mode="Markdown",
         )
 
     def notify_bot_stopped(self, reason: str) -> bool:
         """Notify bot shutdown."""
         return self.send(
-            f"⚠️ *BOT ARRÊTÉ*\n\n"
-            f"❓ *Raison:* `{reason}`\n"
-            f"📡 *Statut:* `Inactif`",
+            f"⚠️ **BOT ARRÊTÉ**\n\n"
+            f"❓ **Raison:** `{reason}`\n"
+            f"📡 **Statut:** `Inactif`",
             parse_mode="Markdown",
         )
 
     def notify_health(self, message: str) -> bool:
         """Send bot health information."""
         return self.send(
-            f"🏥 *SANTÉ DU BOT*\n\n{message}",
+            f"🏥 **SANTÉ DU BOT**\n\n{message}",
             parse_mode="Markdown",
         )
 
     def notify_trade_win(self, city: str, date: str, bucket: str, pnl: float, temp: str, balance: float) -> bool:
         """Notify trade win."""
         return self.send(
-            f"🎉 *TRADE GAGNÉ*\n\n"
-            f"📍 *Ville:* {city}\n"
-            f"📅 *Date:* {date}\n"
-            f"📦 *Bucket:* `{bucket}`\n"
-            f"🌡️ *Temp Réelle:* `{temp}`\n"
-            f"💰 *Gain:* `+${pnl:.2f}`\n"
-            f"🏦 *Solde:* `${balance:.2f}`",
+            f"🎉 **TRADE GAGNÉ**\n\n"
+            f"📍 **Ville:** {city}\n"
+            f"📅 **Date:** {date}\n"
+            f"📦 **Bucket:** `{bucket}`\n"
+            f"🌡️ **Temp Réelle:** `{temp}`\n"
+            f"💰 **Gain:** `+${pnl:.2f}`\n"
+            f"🏦 **Solde:** `${balance:.2f}`",
             parse_mode="Markdown"
         )
 
     def notify_trade_loss(self, city: str, date: str, bucket: str, pnl: float, balance: float) -> bool:
         """Notify trade loss."""
         return self.send(
-            f"❌ *TRADE PERDU*\n\n"
-            f"📍 *Ville:* {city}\n"
-            f"📅 *Date:* {date}\n"
-            f"📦 *Bucket:* `{bucket}`\n"
-            f"💸 *Perte:* `${pnl:.2f}`\n"
-            f"🏦 *Solde:* `${balance:.2f}`",
+            f"❌ **TRADE PERDU**\n\n"
+            f"📍 **Ville:** {city}\n"
+            f"📅 **Date:** {date}\n"
+            f"📦 **Bucket:** `{bucket}`\n"
+            f"💸 **Perte:** `${pnl:.2f}`\n"
+            f"🏦 **Solde:** `${balance:.2f}`",
             parse_mode="Markdown"
         )
 
@@ -210,16 +210,16 @@ class TelegramNotifier:
         # 1. Header & Portfolio Summary
         safe_api_status = escape_markdown(summary['api_status'])
         msg = (
-            f"🕒 *RAPPORT HORAIRE - WEATHERBOT*\n"
+            f"🕒 **RAPPORT HORAIRE - WEATHERBOT**\n"
             f"📅 {now}\n"
             f"──────────────\n"
-            f"💰 *Portefeuille*\n"
+            f"💰 **Portefeuille**\n"
             f"→ PnL Total: `{summary['pnl_total']:+.2f}$` ({summary['pnl_pct']:+.2f}%)\n"
             f"→ Expo: `{summary['exposure']:.2f}$` | Drawdown: `{summary['drawdown']:.1f}%`\n"
             f"→ Actifs: `{summary['active_signals']}` | Effective Bets: `{summary.get('hhi_div', 0)}` (HHI)\n"
             f"→ Drift: `{summary['drift'].upper()}`\n"
             f"──────────────\n"
-            f"📡 *Statut Système*\n"
+            f"📡 **Statut Système**\n"
             f"→ Uptime: `{summary['uptime']}`\n"
             f"→ APIs: {safe_api_status}\n"
             f"──────────────\n"
@@ -250,28 +250,28 @@ class TelegramNotifier:
         safe_reason = escape_markdown(signal['reason'])
         
         msg = (
-            f"💎 *ALERTE PRIORITAIRE : SIGNAL GEM* 💎\n"
+            f"💎 **ALERTE PRIORITAIRE : SIGNAL GEM** 💎\n"
             f"⏰ {now} | Confiance: {signal['conf']}%\n"
             f"──────────────\n"
-            f"📍 *Ville:* {safe_city.upper()}\n"
-            f"🏦 *Marché:* {safe_question}\n"
+            f"📍 **Ville:** {safe_city.upper()}\n"
+            f"🏦 **Marché:** {safe_question}\n"
             f"──────────────\n"
-            f"📊 *MÉTRIQUES CLÉS*\n"
+            f"📊 **MÉTRIQUES CLÉS**\n"
             f"→ Edge Estimé: `{signal['edge']:+.2f}%` 🔥\n"
             f"→ Signal Score: `{signal['score']:.2f}/1.0`\n"
             f"→ Prix Marché: `{signal['price']:.2f}$`\n"
             f"→ Probabilité ML: `{signal['prob']*100:.1f}%`\n"
             f"──────────────\n"
-            f"💰 *TRADE RECOMMANDÉ*\n"
+            f"💰 **TRADE RECOMMANDÉ**\n"
             f"→ Action: `ACHETER OUI`\n"
             f"→ Mise: `${signal['sizing']:.2f}` (Kelly fractionné)\n"
             f"→ Horizon: {signal['horizon']} jours\n"
             f"──────────────\n"
-            f"🧠 *RAISONNEMENT*\n"
+            f"🧠 **RAISONNEMENT**\n"
             f"_{safe_reason}_\n\n"
             f"🔗 [Accéder au Marché]({signal['url']})\n"
             f"──────────────\n"
-            f"⚠️ *Statut Risque:* {signal['risk_status'].upper()}"
+            f"⚠️ **Statut Risque:** {signal['risk_status'].upper()}"
         )
         return self.send(msg, parse_mode="Markdown", chat_id=self.signal_chat_id)
 
