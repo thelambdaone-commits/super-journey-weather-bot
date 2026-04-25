@@ -20,9 +20,9 @@ class PipelineRunner:
         Run a single pipeline command.
         """
         cmd_map = {
-            "train": ["python", "bot.py", "train"],
-            "calibrate": ["python", "bot.py", "calibrate"],
-            "ai-status": ["python", "bot.py", "ai-status"],
+            "train": ["venv/bin/python3", "bot.py", "train"],
+            "calibrate": ["venv/bin/python3", "bot.py", "calibrate"],
+            "ai-status": ["venv/bin/python3", "bot.py", "ai-status"],
         }
         
         if command not in cmd_map:

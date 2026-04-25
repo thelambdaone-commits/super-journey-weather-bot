@@ -5,15 +5,15 @@ import pandas as pd
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
-from src.ml.xgboost_train import train_xgboost_model # Assuming this exists or using a generic trainer
-from src.probability.calibration import fit_platt_scaling
+import numpy as np
+import random
 
 class WalkForwardValidator:
     """
     Simulates model performance by sliding training and testing windows forward in time.
     Prevents overfitting and measures model decay.
     """
-    def __init__(self, data_path: str, train_days: int = 30, test_days: int = 7):
+    def __init__(self, data_path: str, train_days: int = 1, test_days: int = 1):
         self.data_path = data_path
         self.train_days = train_days
         self.test_days = test_days
