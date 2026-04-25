@@ -443,7 +443,10 @@ if __name__ == "__main__":
         if result.get('resolved'):
             print("\nResolved markets:")
             for m in result['resolved'][:10]:
-                print(f"  {m['city']} | {m['date']} | {m['actual']}°C")
+                # Find market for unit
+                market = engine.storage.load_market(m['city'], m['date'])
+                unit = "°F" if market and market.unit == "F" else "°C"
+                print(f"  {m['city']} | {m['date']} | {m['actual']}{unit}")
         if result.get('pending'):
             print(f"\nPending ({len(result['pending'])})")
             for m in result['pending'][:5]:

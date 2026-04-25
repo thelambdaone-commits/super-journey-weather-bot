@@ -12,12 +12,13 @@ from .formatter import format_weather_signal
 
 
 def escape_markdown(text: str) -> str:
-    """Escape special chars to prevent Markdown injection."""
+    """Escape special chars for Telegram Markdown V1."""
     if not text:
         return ""
-    # Escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
-    escape_chars = r'([_*\[\\]()~`>#+\-=|{}.!])'
-    return re.sub(escape_chars, r'\\\1', str(text))
+    # For V1, we mainly need to escape _, *, `, and [
+    for char in ['_', '*', '`', '[']:
+        text = text.replace(char, '\\' + char)
+    return text
 
 
 def _format_signal_msg(city: str, date: str, bucket: str, price: float, ev: float, 
@@ -174,7 +175,7 @@ class TelegramNotifier:
         """Send bot health information."""
         return self.send(
             f"🏥 *SANTÉ DU BOT*\n\n{message}",
-            parse_mode=None,
+            parse_mode="Markdown",
         )
 
     def notify_trade_win(self, city: str, date: str, bucket: str, pnl: float, temp: str, balance: float) -> bool:
@@ -207,64 +208,70 @@ class TelegramNotifier:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # 1. Header & Portfolio Summary
+        safe_api_status = escape_markdown(summary['api_status'])
         msg = (
-            f"🕒 **RAPPORT HORAIRE - WEATHERBOT**\n"
+            f"🕒 *RAPPORT HORAIRE - WEATHERBOT*\n"
             f"📅 {now}\n"
             f"──────────────\n"
-            f"💰 **Portefeuille**\n"
+            f"💰 *Portefeuille*\n"
             f"→ PnL Total: `{summary['pnl_total']:+.2f}$` ({summary['pnl_pct']:+.2f}%)\n"
             f"→ Expo: `{summary['exposure']:.2f}$` | Drawdown: `{summary['drawdown']:.1f}%`\n"
             f"→ Actifs: `{summary['active_signals']}` | Effective Bets: `{summary.get('hhi_div', 0)}` (HHI)\n"
             f"→ Drift: `{summary['drift'].upper()}`\n"
             f"──────────────\n"
-            f"📡 **Statut Système**\n"
+            f"📡 *Statut Système*\n"
             f"→ Uptime: `{summary['uptime']}`\n"
-            f"→ APIs: {summary['api_status']}\n"
+            f"→ APIs: {safe_api_status}\n"
             f"──────────────\n"
         )
         
         # 2. City Signals Summary
         if city_signals:
-            msg += "📍 **Signaux Détectés**\n"
+            msg += "📍 *Signaux Détectés*\n"
             for s in city_signals[:10]: # Limit to 10 for readability
+                safe_city = escape_markdown(s['city'])
                 msg += (
-                    f"• {s['city'].upper()} | {s['edge']:+.1f}% edge | {s['conf']}% conf\n"
+                    f"• {safe_city.upper()} | {s['edge']:+.1f}% edge | {s['conf']}% conf\n"
                     f"  Prix: {s['price']:.2f}$ | Risk: {s['risk']}\n"
                 )
             if len(city_signals) > 10:
                 msg += f"  *(+ {len(city_signals)-10} autres villes)*\n"
         else:
-            msg += "✅ **Surveillance active :** Aucun signal majeur détecté.\n"
+            msg += "✅ *Surveillance active :* Aucun signal majeur détecté.\n"
             
-        msg += "\n🚨 *Audit Engine v2.5.1 Active*"
+        msg += "\n🚨 _Audit Engine v2.5.1 Active_"
         return self.send(msg, parse_mode="Markdown")
 
     def notify_gem_alert(self, signal: dict) -> bool:
         """Send an immediate high-priority alert for GEM signals."""
         now = datetime.now().strftime("%H:%M")
+        safe_city = escape_markdown(signal['city'])
+        safe_question = escape_markdown(signal['question'])
+        safe_reason = escape_markdown(signal['reason'])
+        
         msg = (
-            f"💎 **ALERTE PRIORITAIRE : SIGNAL GEM** 💎\n"
+            f"💎 *ALERTE PRIORITAIRE : SIGNAL GEM* 💎\n"
             f"⏰ {now} | Confiance: {signal['conf']}%\n"
             f"──────────────\n"
-            f"📍 **Ville:** {signal['city'].upper()}\n"
-            f"🏦 **Marché:** {signal['question']}\n"
+            f"📍 *Ville:* {safe_city.upper()}\n"
+            f"🏦 *Marché:* {safe_question}\n"
             f"──────────────\n"
-            f"📊 **MÉTRIQUES CLÉS**\n"
+            f"📊 *MÉTRIQUES CLÉS*\n"
             f"→ Edge Estimé: `{signal['edge']:+.2f}%` 🔥\n"
             f"→ Signal Score: `{signal['score']:.2f}/1.0`\n"
             f"→ Prix Marché: `{signal['price']:.2f}$`\n"
             f"→ Probabilité ML: `{signal['prob']*100:.1f}%`\n"
             f"──────────────\n"
-            f"💰 **TRADE RECOMMANDÉ**\n"
+            f"💰 *TRADE RECOMMANDÉ*\n"
             f"→ Action: `ACHETER OUI`\n"
             f"→ Mise: `${signal['sizing']:.2f}` (Kelly fractionné)\n"
             f"→ Horizon: {signal['horizon']} jours\n"
             f"──────────────\n"
-            f"🧠 **RAISONNEMENT**\n"
-            f"{signal['reason']}\n\n"
+            f"🧠 *RAISONNEMENT*\n"
+            f"_{safe_reason}_\n\n"
             f"🔗 [Accéder au Marché]({signal['url']})\n"
             f"──────────────\n"
-            f"⚠️ **Statut Risque:** {signal['risk_status'].upper()}"
+            f"⚠️ *Statut Risque:* {signal['risk_status'].upper()}"
         )
         return self.send(msg, parse_mode="Markdown", chat_id=self.signal_chat_id)
 

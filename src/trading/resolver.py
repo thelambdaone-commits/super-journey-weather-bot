@@ -29,9 +29,11 @@ class MarketResolver:
         return actual
     
     def auto_resolve_pending(self) -> dict:
-        """Auto-resolve all pending markets using real-time actuals."""
+        """Auto-resolve all pending markets using real-time actuals and update state."""
         resolved_count = 0
         results = {"resolved": [], "failed": [], "pending": []}
+        state = self.engine.storage.load_state()
+        initial_balance = state.balance
         
         for market in self.engine.storage.load_all_markets():
             if market.status == "resolved":
@@ -44,13 +46,21 @@ class MarketResolver:
                 actual = self.poll_actual(market.city, market.date)
                 if actual is not None:
                     market.actual_temp = actual
+                    # Full resolution
+                    new_balance, won, pnl = self.resolve_market(market, state.balance)
+                    if won is not None:
+                        state.balance = new_balance
+                        if won: state.wins += 1
+                        else: state.losses += 1
+                        resolved_count += 1
+                        results["resolved"].append({
+                            "city": market.city,
+                            "date": market.date,
+                            "actual": actual,
+                            "won": won,
+                            "pnl": pnl
+                        })
                     self.engine.storage.save_market(market)
-                    resolved_count += 1
-                    results["resolved"].append({
-                        "city": market.city,
-                        "date": market.date,
-                        "actual": actual
-                    })
                 else:
                     results["pending"].append({
                         "city": market.city,
@@ -62,7 +72,12 @@ class MarketResolver:
                     "reason": "missing_data"
                 })
         
+        if resolved_count > 0:
+            state.peak_balance = max(state.peak_balance, state.balance)
+            self.engine.storage.save_state(state)
+            
         results["total"] = resolved_count
+        results["pnl"] = state.balance - initial_balance
         return results
 
     def get_recent_errors(self, days: int = 7) -> dict:

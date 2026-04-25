@@ -65,28 +65,43 @@ class TradingEngine:
         state = self.storage.load_state()
         self.last_report_ts = state.last_report_ts
         self.gem_threshold = 0.85 # Score threshold for GEM
+        from ..strategy.gem import GEMDetector
+        self.gem_detector = GEMDetector()
 
     def stop(self) -> None:
         """Request a graceful stop."""
         self.running = False
 
     def build_health_report(self, api_statuses: list[tuple[str, str, float]]) -> str:
-        """Build a concise health summary."""
+        """Build a premium health summary with emojis."""
         state = self.storage.load_state()
         markets = self.storage.load_all_markets()
-        open_positions = sum(1 for market in markets if market.position and market.position.get("status") == "open")
+        open_pos = [m for m in markets if m.position and m.position.get("status") == "open"]
+        
+        mode_label = bot_mode_label(self.modes).upper()
+        live_status = "ACTIVÉ ⚠️" if self.modes.live_trade else "DÉSACTIVÉ"
+        paper_status = "OUI" if self.modes.paper_mode else "NON"
+        
         return (
-            f"Mode: {bot_mode_label(self.modes)}\n"
-            f"Paper mode: {'on' if self.modes.paper_mode else 'off'}\n"
-            f"Live trade: {'on' if self.modes.live_trade else 'off'}\n"
-            f"Signal mode: {'on' if self.modes.signal_mode else 'off'}\n"
-            f"TUI: {'on' if self.modes.tui_mode else 'off'}\n"
-            f"Balance: ${state.balance:,.2f}\n"
-            f"Marchés suivis: {len(markets)}\n"
-            f"Positions ouvertes: {open_positions}\n"
-            f"ML samples: {self.ml_model.get('samples', 0)}\n"
-            f"Scan: {self.config.scan_interval // 60} min\n"
-            f"APIs:\n{render_api_statuses(api_statuses)}"
+            f"──────────────\n"
+            f"⚙️ *CONFIGURATION*\n"
+            f"→ Mode: `{mode_label}`\n"
+            f"→ Paper: `{paper_status}` | Live: `{live_status}`\n"
+            f"→ Scan: `{self.config.scan_interval // 60} min`\n"
+            f"──────────────\n"
+            f"💰 *PORTEFEUILLE*\n"
+            f"→ Solde: `${state.balance:,.2f}`\n"
+            f"→ Positions: `{len(open_pos)}` ouvertes\n"
+            f"→ Marchés: `{len(markets)}` suivis\n"
+            f"──────────────\n"
+            f"🧠 *INTELLIGENCE*\n"
+            f"→ ML Samples: `{self.ml_model.get('samples', 0)}` units\n"
+            f"→ Diagnostics: `Optimisé` ✅\n"
+            f"──────────────\n"
+            f"📡 *CONNECTIVITÉ*\n"
+            f"{render_api_statuses(api_statuses)}\n"
+            f"──────────────\n"
+            f"🟢 *SYSTÈME OPÉRATIONNEL*"
         )
 
     def emit(self, message: str) -> None:
@@ -150,35 +165,51 @@ class TradingEngine:
         last_scan = 0.0
         try:
             while self.running:
-                now = time.time()
-                
-                if not self.check_risk():
-                    self.emit("Bot arrêté par sécurité (Risk Limit).")
-                    self.stop()
-                    break
+                try:
+                    now = time.time()
+                    
+                    if not self.check_risk():
+                        self.emit("Bot arrêté par sécurité (Risk Limit).")
+                        self.stop()
+                        break
 
-                # Hourly Report Check
-                if now - self.last_report_ts >= 3600:
-                    self.send_full_audit_report()
-                    self.last_report_ts = now
+                    # Hourly Report & Ouroboros Check
+                    if now - self.last_report_ts >= 3600:
+                        try:
+                            self.send_full_audit_report()
+                            
+                            # Trigger Ouroboros (Auto-Improvement)
+                            self.emit("Checking Ouroboros for auto-improvement...")
+                            from src.ai.ourobouros import run_ourobouros
+                            run_ourobouros(min_resolutions=10)
+                            
+                            self.last_report_ts = now
+                        except Exception as report_exc:
+                            self.emit(f"Report/Ouroboros error: {report_exc}")
+                            logger.error(f"Failed to run hourly tasks: {report_exc}")
 
-                if now - last_scan >= self.config.scan_interval:
-                    self.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] scanning...")
-                    try:
-                        result = self.scanner.scan_and_update()
-                        state = self.storage.load_state()
-                        self.emit(
-                            f" balance: ${state.balance:,.2f} | new: {result.new_trades} | "
-                            f"closed: {result.closed} | resolved: {result.resolved}"
-                        )
-                        last_scan = now
-                    except Exception as exc:
-                        self.emit(f"Critical scan error: {exc}")
-                        logger.exception("Uncaught exception in scan loop")
-                        time.sleep(60)
+                    # Scan Check
+                    if now - last_scan >= self.config.scan_interval:
+                        self.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] scanning...")
+                        try:
+                            result = self.scanner.scan_and_update()
+                            state = self.storage.load_state()
+                            self.emit(
+                                f" balance: ${state.balance:,.2f} | new: {result.new_trades} | "
+                                f"closed: {result.closed} | resolved: {result.resolved}"
+                            )
+                            last_scan = now
+                        except Exception as scan_exc:
+                            self.emit(f"Critical scan error: {scan_exc}")
+                            logger.exception("Uncaught exception in scan loop")
+                            time.sleep(60) # Wait before retry if scan failed
 
-                if self.running:
-                    time.sleep(MONITOR_INTERVAL)
+                    if self.running:
+                        time.sleep(60) # High-precision monitor sleep (1 min)
+                except Exception as loop_exc:
+                    self.emit(f"Loop error: {loop_exc}")
+                    logger.exception(f"Unexpected error in main loop: {loop_exc}")
+                    time.sleep(60) # Safety sleep
         finally:
             self.feedback.notify_stopped("manual stop" if not self.running else "loop exited")
 
@@ -212,23 +243,33 @@ class TradingEngine:
             )
             
             # GEM Signal Detection (Immediate Priority Alert)
-            if ranked_item.score >= self.gem_threshold:
+            gem_score = self.gem_detector.score(
+                model_probability=signal["p"],
+                market_price=signal["entry_price"],
+                net_ev=signal["ev"],
+                spread=signal["spread"],
+                volume=trade_context.get("liquidity", 0),
+                confidence=signal.get("ml", {}).get("confidence", 0),
+                question=signal["question"],
+            )
+
+            if gem_score.is_valid or ranked_item.score >= self.gem_threshold:
                 gem_data = {
                     "city": candidate["loc"].name,
                     "question": signal["question"],
                     "edge": signal["ev"],
-                    "score": ranked_item.score,
+                    "score": max(ranked_item.score, gem_score.total / 100.0 if gem_score.total > 0 else 0),
                     "price": signal["entry_price"],
                     "prob": signal["p"],
                     "sizing": signal["cost"],
                     "horizon": candidate["horizon"],
                     "reason": candidate["note"],
                     "url": f"https://polymarket.com/event/{signal['market_id']}",
-                    "risk_status": "MODERATE", # Dynamic risk
-                    "conf": signal.get("ml", {}).get("confidence", 0)
+                    "risk_status": "MODERATE" if not gem_score.exclusion_reason else "HIGH",
+                    "conf": int(signal.get("ml", {}).get("confidence", 0) * 100)
                 }
                 self.feedback.notify_gem_alert(gem_data)
-                self.emit(f"💎 GEM ALERT: {candidate['loc'].name} | Score {ranked_item.score:.2f}")
+                self.emit(f"💎 GEM ALERT: {candidate['loc'].name} | Score {gem_data['score']:.2f}")
 
             # Commit the signal to persistence (cooldowns, etc.)
             self.signal_quality.commit(Signal.from_dict(candidate["loc"].name, signal))
@@ -297,19 +338,18 @@ class TradingEngine:
         state = self.storage.load_state()
         markets = self.storage.load_all_markets()
         
-        # 1. Resolve resolved trades for metrics
+        # 1. Metrics Calculation
         resolved_trades = []
         for m in markets:
             if m.status == "resolved" and m.pnl is not None:
                 resolved_trades.append({
                     "pnl": m.pnl, 
-                    "unix_ts": os.path.getmtime(self.config.data_dir) # Proxy
+                    "unix_ts": time.time() # Proxy for metrics
                 })
         
         metrics = calculate_audit_metrics(resolved_trades, state.starting_balance)
         
         # 2. Portfolio Summary
-        active_pos = [m for m in markets if m.position and m.position.get("status") == "open"]
         drawdown = (state.peak_balance - state.balance) / state.peak_balance if state.peak_balance > 0 else 0
         
         # 3. API & Health
@@ -317,7 +357,7 @@ class TradingEngine:
         uptime_sec = int(time.time() - self.start_time)
         uptime_str = f"{uptime_sec // 3600}h {(uptime_sec % 3600) // 60}m"
         
-        # 3. Risk & Diversification
+        # 4. Risk & Diversification
         risk_summary = self.risk_manager.get_risk_summary(markets)
         
         summary = {
@@ -332,21 +372,50 @@ class TradingEngine:
             "hhi_div": risk_summary["diversification_index"]
         }
         
-        # 3. City Signals Summary
+        # 5. Gather Latest Signals for ALL Cities
         city_signals = []
-        for m in active_pos:
-            pos = m.position
-            city_signals.append({
-                "city": m.city,
-                "edge": pos.get("ev", 0),
-                "conf": pos.get("ml", {}).get("confidence", 0) * 100,
-                "price": pos.get("entry_price", 0),
-                "risk": "MODERATE",
-                "variation": pos.get("price_change", 0) # Mock if missing
-            })
+        by_city = {}
+        for m in markets:
+            if m.status == "resolved": continue
+            
+            # Priority: Open Position > Signal Marker > Last Analysis
+            sig = None
+            if m.position and m.position.get("status") == "open":
+                sig = {
+                    "city": m.city_name,
+                    "edge": m.position.get("ev", 0),
+                    "conf": m.position.get("ml", {}).get("confidence", 0) * 100,
+                    "price": m.position.get("entry_price", 0),
+                    "risk": "OPEN"
+                }
+            elif m.signal_state:
+                sig = {
+                    "city": m.city_name,
+                    "edge": m.signal_state.get("ev", 0),
+                    "conf": m.signal_state.get("ml_conf", 0) * 100,
+                    "price": m.signal_state.get("entry_price", 0),
+                    "risk": "SIGNAL"
+                }
+            elif m.last_analysis:
+                sig = {
+                    "city": m.city_name,
+                    "edge": m.last_analysis.get("ev", 0),
+                    "conf": m.last_analysis.get("conf", 0) * 100,
+                    "price": m.last_analysis.get("price", 0),
+                    "risk": "WATCH"
+                }
+            
+            if sig:
+                # Keep the one with highest edge per city
+                if m.city not in by_city or sig["edge"] > by_city[m.city]["edge"]:
+                    by_city[m.city] = sig
+        
+        # Sort and limit to top 15 for readability
+        sorted_sigs = sorted(by_city.values(), key=lambda x: x["edge"], reverse=True)
+        city_signals = sorted_sigs[:15]
         
         self.feedback.notify_hourly_report(summary, city_signals)
         
-        # Persist last report timestamp to prevent spam on restart
+        # Persist last report timestamp
         state.last_report_ts = time.time()
         self.storage.save_state(state)

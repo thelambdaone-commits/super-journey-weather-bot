@@ -63,6 +63,7 @@ class Market:
     pnl: Optional[float] = None
     signal_state: Optional[Dict] = None
     paper_state: Optional[Dict] = None
+    last_analysis: Optional[Dict] = None
     forecast_snapshots: List[Dict] = None
     market_snapshots: List[Dict] = None
     all_outcomes: List[Dict] = None
@@ -79,6 +80,8 @@ class Market:
             self.signal_state = {}
         if self.paper_state is None:
             self.paper_state = {}
+        if self.last_analysis is None:
+            self.last_analysis = {}
 
 
 class Storage:
@@ -122,12 +125,12 @@ class Storage:
             return Market(**data)
         return None
     
-def save_market(self, market: Market):
-    """Save market data atomically."""
-    path = self.market_path(market.city, market.date)
-    data = asdict(market)
-    content = json.dumps(data, indent=2, ensure_ascii=False)
-    _atomic_write(path, content, encoding="utf-8")
+    def save_market(self, market: Market):
+        """Save market data atomically."""
+        path = self.market_path(market.city, market.date)
+        data = asdict(market)
+        content = json.dumps(data, indent=2, ensure_ascii=False)
+        _atomic_write(path, content, encoding="utf-8")
     
     def load_all_markets(self) -> List[Market]:
         """Load all markets."""

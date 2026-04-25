@@ -79,7 +79,7 @@ class ScoringEngine:
                 item[0],
                 float(item[1]["signal"].get("ev", 0.0) or 0.0),
                 float(item[1]["trade_context"].get("confidence", 0.0) or 0.0),
-                str(item[1]["city"]),
+                str(item[1]["loc"].name),
             ),
             reverse=True,
         )
@@ -90,8 +90,8 @@ class ScoringEngine:
                 ScoredTrade(
                     score=score,
                     rank=index,
-                    city=candidate["city"],
-                    date=candidate["date"],
+                    city=candidate["loc"].name,
+                    date=candidate["date_str"],
                     market_id=candidate["signal"]["market_id"],
                     signal=candidate["signal"],
                     trade_context=candidate["trade_context"],

@@ -139,6 +139,15 @@ class MarketScanner:
                     opportunity = self.find_opportunity(city_slug, loc, snap, outcomes, hours, base_features, balance)
                     if opportunity:
                         outcome, probability_estimate, edge_estimate, features = opportunity
+                        signal = self.build_signal(outcome, probability_estimate, edge_estimate, features, 0.0, 0.0, forecast_temp, best_source)
+                        market.last_analysis = {
+                            "ev": signal["ev"],
+                            "price": signal["entry_price"],
+                            "conf": signal.get("ml", {}).get("confidence", 0),
+                            "ts": datetime.now(timezone.utc).isoformat()
+                        }
+                        
+                        # Continue with trade sizing and filters
                         kelly, size = size_position(
                             probability_estimate.probability,
                             outcome["ask"],

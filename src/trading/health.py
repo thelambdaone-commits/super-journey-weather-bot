@@ -28,5 +28,12 @@ def get_api_statuses(config, feedback: EngineFeedback) -> list[tuple[str, str, f
     return statuses
 
 def render_api_statuses(api_statuses: list[tuple[str, str, float]]) -> str:
-    """Render API statuses with latency for console."""
-    return "\n".join(f"- {name}: {status} ({lat:.0f}ms)" for name, status, lat in api_statuses)
+    """Render API statuses with emojis and latency for Telegram."""
+    lines = []
+    for name, status, lat in api_statuses:
+        emoji = "🟢" if status == "connected" else "🔴"
+        # Format name: open_meteo -> Open Meteo
+        display_name = name.replace("_", " ").title()
+        latency_str = f" ({lat:.0f}ms)" if lat > 0 else ""
+        lines.append(f"{emoji} *{display_name}*: `{status}`{latency_str}")
+    return "\n".join(lines)
