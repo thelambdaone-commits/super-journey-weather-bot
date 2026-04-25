@@ -564,7 +564,7 @@ if __name__ == "__main__":
         print(f"=== PURGE CHANNEL (Limit: {args.limit}) ===")
         
         # Probe to get current message ID
-        probe_id = notifier.send("🧹 **PURGE INITIALISÉE**", parse_mode="Markdown")
+        probe_id = notifier.send("🧹 **PURGE INITIALISÉE**\n__ Nettoyage en cours... __", parse_mode="Markdown")
         if not probe_id:
             print("❌ Erreur: Impossible d'initialiser la purge.")
         else:

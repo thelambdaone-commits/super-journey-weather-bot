@@ -40,9 +40,9 @@ def _format_signal_msg(city: str, date: str, bucket: str, price: float, ev: floa
         f"📡 Source: {source.upper()}\n"
     )
     if safe_question:
-        msg += f"\n🏛️ Question: _{safe_question}_"
+        msg += f"\n🏛️ Question: __ {safe_question} __"
     if safe_note:
-        msg += f"\n📝 Note: _{safe_note}_"
+        msg += f"\n📝 Note: __ {safe_note} __"
     return msg
 
 
@@ -129,7 +129,7 @@ class TelegramNotifier:
             f"📡 **Source:** {source.upper()}"
         )
         if ai_note:
-            msg += f"\n\n_{ai_note.strip()}_"
+            msg += f"\n\n__ {ai_note.strip()} __"
         return self.send(msg, parse_mode="Markdown")
 
     def notify_signal(self, city: str, date: str, bucket: str, price: float, 
@@ -167,7 +167,7 @@ class TelegramNotifier:
         
         message = format_weather_signal(payload)
         if ai_note:
-            message = f"{message}\n\n_{ai_note.strip()}_"
+            message = f"{message}\n\n__ {ai_note.strip()} __"
             
         return self.send(message, parse_mode="Markdown", chat_id=self.signal_chat_id)
 
@@ -259,7 +259,7 @@ class TelegramNotifier:
         else:
             msg += "✅ *Surveillance active :* Aucun signal majeur détecté.\n"
             
-        msg += "\n🚨 _Audit Engine v2.5.1 Active_"
+        msg += "\n🚨 __ Audit Engine v2.5.1 Active __"
         return self.send(msg, parse_mode="Markdown")
 
     def notify_gem_alert(self, signal: dict) -> bool:
@@ -288,7 +288,7 @@ class TelegramNotifier:
             f"→ Horizon: {signal['horizon']} jours\n"
             f"──────────────\n"
             f"🧠 **RAISONNEMENT**\n"
-            f"_{safe_reason}_\n\n"
+            f"__ {safe_reason} __\n\n"
             f"🔗 [Accéder au Marché]({signal['url']})\n"
             f"──────────────\n"
             f"⚠️ **Statut Risque:** {signal['risk_status'].upper()}"

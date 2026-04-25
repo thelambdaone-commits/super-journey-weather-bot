@@ -22,11 +22,12 @@ class OuroborosNotifier:
             self._notifier = None
     
     def send(self, message: str) -> bool:
-        """Send message to Telegram."""
+        """Send message to Telegram with Markdown enabled."""
         if not self._notifier:
             return False
         try:
-            return self._notifier.send(message)
+            # Explicitly pass parse_mode="Markdown"
+            return bool(self._notifier.send(message, parse_mode="Markdown"))
         except Exception:
             return False
     
@@ -35,7 +36,7 @@ class OuroborosNotifier:
         return self.send(
             "🐍 **OUROBOROS CHECK**\n"
             "──────────────\n"
-            f"⏸️ _{reason}_"
+            f"⏸️ __ {reason} __"
         )
     
     def notify_start(self, new_resolutions: int, total_gems: int) -> bool:
@@ -48,7 +49,7 @@ class OuroborosNotifier:
             f"→ GEMs: `{total_gems}` détectés\n"
             "→ Pipeline: `Train → Calibrate`\n"
             "──────────────\n"
-            "🏗️ _Optimisation du modèle en cours..._"
+            "🏗️ __ Optimisation du modèle en cours... __"
         )
     
     def notify_success(
@@ -77,12 +78,12 @@ class OuroborosNotifier:
             "💎 **GEMS PRODUITS**\n"
             f"{gems_display}\n"
             "──────────────\n"
-            "✨ _Modèle mis à jour avec succès_"
+            "✨ __ Modèle mis à jour avec succès __"
         )
     
     def notify_failed(self, error: str, restored: bool = True) -> bool:
         """Notify about failed retrain with rollback."""
-        restore_msg = "🟢 _Ancien modèle restauré_" if restored else "🔴 _Échec de la restauration_"
+        restore_msg = "🟢 __ Ancien modèle restauré __" if restored else "🔴 __ Échec de la restauration __"
         return self.send(
             "🚨 **OUROBOROS FAILED**\n"
             "──────────────\n"
@@ -96,4 +97,7 @@ class OuroborosNotifier:
     
     def notify_skip(self, reason: str) -> bool:
         """Notify about skipped retrain."""
-        return self.send(f"⏭️ *OUROBOROS SKIP*\n_{reason}_")
+        return self.send(
+            "⏭️ **OUROBOROS SKIP**\n"
+            f"__ {reason} __"
+        )
