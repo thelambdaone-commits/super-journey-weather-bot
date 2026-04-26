@@ -40,6 +40,13 @@ The system enforces strict safety layers:
   - live requires `POLYMARKET_PRIVATE_KEY`,
   - CLOB execution uses real orderbook bid/ask rather than Gamma display prices,
   - synthetic stop handling cancels the resting take-profit order before market close.
+- **Micro-Live Caps** (NEW):
+  - `MAX_LIVE_BET_USD=10` - hard cap per trade in live mode
+  - `MAX_LIVE_TOTAL_EXPOSURE_USD=50` - hard cap total exposure in live mode
+  - Overrides Kelly calculation if exceeded
+- **Drawdown Alerts** (NEW):
+  - 5% drawdown → Telegram warning alert
+  - 15% drawdown → Kill switch (bot stops automatically)
 
 ---
 
@@ -54,6 +61,33 @@ The system enforces strict safety layers:
 | Polymarket Gamma | None | Market data |
 | Polymarket CLOB | Wallet credentials for live | Executable orderbook and order posting |
 | Groq | Free key | AI analysis |
+
+---
+
+## ML & Auto-Improvement
+
+The system uses XGBoost for weather prediction with an auto-improvement loop:
+
+- **XGBoost** - Primary ML model (binary classification)
+- **Hyperparameter Tuning** - Grid/Random search with CV and safety gates
+- **Ouroboros** - Auto-improvement loop with retrain/rollback
+- **Calibration** - Isotonic regression for probability calibration
+
+### Hyperparameter Tuning (NEW)
+```bash
+# Run tuning with default settings
+python bot.py tune
+
+# With custom parameters
+python bot.py tune --trials 32 --timeout 300 --min-improvement 0.01
+```
+
+Features:
+- Grid search + Random search over hyperparameter space
+- 5-fold cross-validation
+- Automatic rejection if no improvement vs baseline
+- Safety gates: rejects on small datasets (<100 train rows)
+- History tracking in `data/tuning_history.jsonl`
 
 ---
 
@@ -97,6 +131,9 @@ python bot.py train
 
 # Calibrate probabilities
 python bot.py calibrate
+
+# Hyperparameter tuning (NEW)
+python bot.py tune --trials 32 --timeout 300
 
 # Backfill historical temperatures
 python bot.py backfill --actuals
@@ -285,7 +322,14 @@ weatherbot/
 │   │   ├── scoring.py
 │   │   ├── sizing.py
 │   │   ├── edge.py
-│   │   └── risk_manager.py
+│   │   ├── risk_manager.py
+│   │   ├── optimize.py           # (NEW) Scoring weight optimization
+│   │   └── gem.py              # GEM detection
+│   ├── ml/
+│   │   ├── xgboost_train.py
+│   │   ├── hyperopt.py         # (NEW) Hyperparameter tuning
+│   │   ├── calibration_audit.py
+│   │   └── registry.py
 │   ├── trading/
 │   │   ├── engine.py
 │   │   ├── scanner.py
@@ -320,9 +364,56 @@ weatherbot/
 - [x] Polymarket CLOB orderbook pricing for executable bid/ask.
 - [x] Telegram main and signal-channel notifications.
 - [x] Open-Meteo archive and Meteostat fallback for actual temperatures.
+- [x] Micro-live caps ($10/$50) and drawdown alerts (5%/15%).
+- [x] Hyperparameter tuning with safety gates.
 - [ ] Fit and validate calibration after enough resolved rows.
 - [ ] Improve ranking until Top-K outperforms naive/random baselines.
 - [ ] Run 30-60 days of monitored paper trading before any live exposure.
+
+---
+
+## Live Readiness Checklist
+
+See `CHECKLIST_MICRO_LIVE.md` for the complete checklist.
+
+### Quick Summary
+| Criteria | Threshold |
+|----------|-----------|
+| Resolved rows | 100+ |
+| Paper run | 14+ days |
+| Calibration | fitted |
+| Top-K vs baseline | positive |
+| Max drawdown | < 10% |
+| Telegram alerts | verified |
+| Live cap | $10 configured |
+
+---
+
+## Ops & Deployment (NEW)
+
+### Systemd Auto-Restart
+Copy the service file and enable:
+```bash
+sudo cp weatherbot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable weatherbot
+sudo systemctl start weatherbot
+```
+
+### Manual Auto-Restart (tmux)
+```bash
+tmux new -s weatherbot
+# Inside tmux:
+./venv/bin/python bot.py run
+# Detach: Ctrl+B, then D
+# Reattach: tmux attach -t weatherbot
+```
+
+### Environment Variables
+See `.env.example` for all configurable options:
+- Risk limits (MAX_EXPOSURE_PER_CITY, etc.)
+- Micro-live caps (MAX_LIVE_BET_USD, MAX_LIVE_TOTAL_EXPOSURE_USD)
+- Signal parameters
 
 ---
 
