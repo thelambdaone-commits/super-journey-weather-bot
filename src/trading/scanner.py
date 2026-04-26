@@ -197,7 +197,7 @@ class MarketScanner:
 
                         if size >= 0.50:
                             signal = self.build_signal(outcome, probability_estimate, edge_estimate, features, kelly, size, forecast_temp, best_source)
-                            ai_review, flagged = get_ai_trade_context(loc.name, snap, signal)
+                            ai_review, flagged = get_ai_trade_context(loc.name, snap, signal, unit=loc.unit)
                             if ai_review:
                                 signal["ai"] = ai_review
                             
@@ -245,7 +245,7 @@ class MarketScanner:
                                             self.engine.feedback.notify_trade_open(
                                                 loc.name, date_str, f"{signal['bucket_low']}-{signal['bucket_high']}{unit_sym}",
                                                 signal["entry_price"], signal["ev"], signal["cost"], signal["forecast_src"],
-                                                f"{note}\n🛡️ **TP ACTIF / STOP SURVEILLÉ** "
+                                                f"{note}\n🛡️ *TP ACTIF / STOP SURVEILLÉ* "
                                                 f"(TP {exec_res.get('tp_price')}, SL {exec_res.get('stop_price')})"
                                             )
                                             self.engine.emit(
@@ -324,6 +324,7 @@ class MarketScanner:
             candidate_features = dict(base_features)
             candidate_features.update(self.engine.feature_engine.build(loc, snap, outcomes, hours, candidate))
             candidate_features["confidence"] = estimate.confidence
+            candidate_features["sigma"] = estimate.sigma
             volume = candidate.get("volume", 0)
             current_edge = self.engine.edge_engine.compute(estimate.probability, candidate["ask"], candidate_features, best_source, volume)
             

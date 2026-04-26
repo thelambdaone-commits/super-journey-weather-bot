@@ -100,7 +100,7 @@ def bot_mode_label(modes: RuntimeModes) -> str:
     active.append(f"tui_{'on' if modes.tui_mode else 'off'}")
     return ",".join(active) if active else "all_off"
 
-def get_ai_trade_context(city: str, snap: dict, signal: dict) -> tuple[dict | None, bool]:
+def get_ai_trade_context(city: str, snap: dict, signal: dict, unit: str = "C") -> tuple[dict | None, bool]:
     """Optionally review a trade with Groq and flag anomalies."""
     analysis = analyze_forecast(
         city,
@@ -108,6 +108,7 @@ def get_ai_trade_context(city: str, snap: dict, signal: dict) -> tuple[dict | No
         snap.get("hrrr"),
         snap.get("metar"),
         None,
+        unit=unit,
     )
     if analysis.get("error"):
         return None, False
@@ -118,6 +119,7 @@ def get_ai_trade_context(city: str, snap: dict, signal: dict) -> tuple[dict | No
         signal["entry_price"],
         signal["ev"],
         signal["p"],
+        unit=unit,
     )
     analysis["anomaly"] = anomaly
     return analysis, bool(anomaly.get("is_anomaly"))

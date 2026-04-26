@@ -46,7 +46,7 @@ class FeedbackRecorder:
             forecast_horizon=horizon,
             ecmwf_max=snapshot.get("ecmwf"),
             hrrr_max=snapshot.get("hrrr"),
-            gfs_max=snapshot.get("dwd"),
+            gfs_max=snapshot.get("gfs"),
             ensemble_mean=features.get("ensemble_mean"),
             ensemble_std=features.get("ensemble_std"),
             forecast_spread=features.get("forecast_spread"),

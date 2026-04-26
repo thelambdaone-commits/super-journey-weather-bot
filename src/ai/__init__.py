@@ -43,6 +43,7 @@ def analyze_forecast(
     hrrr: Optional[float],
     metar: Optional[float],
     actual: Optional[float],
+    unit: str = "C",
 ) -> Dict[str, Any]:
     """
     Use Groq to analyze forecast data and generate insights.
@@ -52,13 +53,15 @@ def analyze_forecast(
     if not client:
         return {"error": "Groq not configured"}
     
+    unit_sym = "°F" if unit == "F" else "°C"
+    
     # Build prompt
     prompt = f"""Analyze this weather forecast for {city}:
 
-- ECMWF forecast: {ecmwf}°C
-- HRRR forecast: {hrrr}°C  
-- Current METAR: {metar}°C
-- Actual (resolved): {actual}°C
+- ECMWF forecast: {ecmwf}{unit_sym}
+- HRRR forecast: {hrrr}{unit_sym}  
+- Current METAR: {metar}{unit_sym}
+- Actual (resolved): {actual}{unit_sym}
 
 Respond with JSON:
 {{
@@ -141,16 +144,19 @@ def check_anomaly(
     market_price: float,
     ev: float,
     confidence: float,
+    unit: str = "C",
 ) -> Dict[str, Any]:
     """Check if there's an anomaly in the trade opportunity."""
     client = get_groq_client()
     if not client:
         return {"is_anomaly": False}
     
+    unit_sym = "°F" if unit == "F" else "°C"
+    
     prompt = f"""Check if this trade is anomalous:
 
 City: {city}
-Forecast: {forecast_temp}°C
+Forecast: {forecast_temp}{unit_sym}
 Market Price: ${market_price}
 Expected Value: {ev:.2f}
 Model Confidence: {confidence:.2f}

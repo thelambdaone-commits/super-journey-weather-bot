@@ -45,8 +45,36 @@ def get_ecmwf(city_slug: str, dates: list[str]) -> Dict[str, float]:
     raise WeatherAPIError(f"ECMWF failed after 3 attempts")
 
 
+def get_gfs(city_slug: str, dates: list[str]) -> Dict[str, float]:
+    """GFS seamless via Open-Meteo."""
+    loc = get_by_slug(city_slug)
+    temp_unit = "fahrenheit" if loc.unit == "F" else "celsius"
+    
+    result = {}
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={loc.lat}&longitude={loc.lon}"
+        f"&daily=temperature_2m_max&temperature_unit={temp_unit}"
+        f"&forecast_days=7&timezone={get_timezone(city_slug)}"
+        f"&models=gfs_seamless"
+    )
+    
+    for attempt in range(3):
+        try:
+            data = requests.get(url, timeout=(5, 10)).json()
+            if "error" not in data:
+                for date, temp in zip(data["daily"]["time"], data["daily"]["temperature_2m_max"]):
+                    if date in dates and temp is not None:
+                        result[date] = round(temp, 1) if loc.unit == "C" else round(temp)
+            return result
+        except Exception:
+            if attempt < 2:
+                time.sleep(1)
+    raise WeatherAPIError(f"GFS failed after 3 attempts")
+
+
 def get_hrrr(city_slug: str, dates: list[str]) -> Dict[str, float]:
-    """HRRR/GFS via Open-Meteo (US only)."""
+    """HRRR via Open-Meteo (US only)."""
     loc = get_by_slug(city_slug)
     if loc.region != "us":
         return {}
@@ -57,7 +85,7 @@ def get_hrrr(city_slug: str, dates: list[str]) -> Dict[str, float]:
         f"?latitude={loc.lat}&longitude={loc.lon}"
         f"&daily=temperature_2m_max&temperature_unit=fahrenheit"
         f"&forecast_days=3&timezone={get_timezone(city_slug)}"
-        f"&models=gfs_seamless"
+        f"&models=hrrr"
     )
     
     for attempt in range(3):
@@ -193,6 +221,7 @@ def get_forecasts(city_slug: str, dates: list[str]) -> Dict[str, Dict]:
     
     ecmwf = get_ecmwf(city_slug, dates)
     hrrr = get_hrrr(city_slug, dates)
+    gfs = get_gfs(city_slug, dates)
     dwd = get_dwd(city_slug, dates)
     nws = get_nws(city_slug, dates)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -203,6 +232,7 @@ def get_forecasts(city_slug: str, dates: list[str]) -> Dict[str, Dict]:
             "ts": now,
             "ecmwf": ecmwf.get(date),
             "hrrr": hrrr.get(date),
+            "gfs": gfs.get(date),
             "dwd": dwd.get(date),
             "nws": nws.get(date),
             "metar": get_metar(city_slug) if date == today else None,

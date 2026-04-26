@@ -106,23 +106,17 @@ class SignalQualityLayer:
 
     def is_duplicate(self, signal: Signal) -> bool:
         """Check for duplicates or city-level cooldowns."""
-        # 1. Exact market duplicate check
+        from src.trading.idempotence import get_idempotence_manager
+        
+        # 1. Exact market duplicate check (Window: 24h)
         key = f"{signal.market_id}:{signal.city}:{signal.direction}"
-        last_time = self.state["last_signals"].get(key)
-
-        if last_time:
-            # Duplicate window (from config)
-            duplicate_window = getattr(self.config, "signal_duplicate_window_hours", 24) * 3600
-            if (time.time() - last_time) < duplicate_window:
-                return True
+        if get_idempotence_manager().is_duplicate("signal", key, window_seconds=24 * 3600):
+            return True
 
         # 2. City cooldown check
         city_key = f"city_cooldown:{signal.city}"
-        last_city_time = self.state["last_signals"].get(city_key)
-        if last_city_time:
-            cooldown = self.COOLDOWN_HOURS * 3600
-            if (time.time() - last_city_time) < cooldown:
-                return True
+        if get_idempotence_manager().is_duplicate("city_cooldown", city_key, window_seconds=self.COOLDOWN_HOURS * 3600):
+            return True
 
         return False
 

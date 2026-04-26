@@ -15,6 +15,9 @@ class AuditMetrics:
     max_drawdown: float
     expectancy_per_trade: float
     total_pnl_net: float
+    avg_win: float
+    avg_loss: float
+    r_multiple: float
     total_fees: float
     avg_slippage: float
     drift_status: str = "stable" # stable, degrading, critical
@@ -67,6 +70,10 @@ def calculate_audit_metrics(trades: List[dict], starting_balance: float) -> Audi
             if recent_pf < 0.9:
                 drift_status = "critical"
 
+    avg_win = gross_profit / len(wins) if wins else 0.0
+    avg_loss = gross_loss / len(losses) if losses else 0.0
+    r_multiple = avg_win / avg_loss if avg_loss > 0 else 0.0
+
     return AuditMetrics(
         total_trades=total_trades,
         win_rate=round(win_rate, 4),
@@ -75,6 +82,9 @@ def calculate_audit_metrics(trades: List[dict], starting_balance: float) -> Audi
         max_drawdown=round(max_dd, 4),
         expectancy_per_trade=round(expectancy, 4),
         total_pnl_net=round(total_pnl, 2),
+        avg_win=round(avg_win, 2),
+        avg_loss=round(avg_loss, 2),
+        r_multiple=round(r_multiple, 2),
         total_fees=0.0, # Placeholder
         avg_slippage=0.015, # Based on PaperAccount simulation
         drift_status=drift_status
@@ -83,7 +93,7 @@ def calculate_audit_metrics(trades: List[dict], starting_balance: float) -> Audi
 def format_audit_report(metrics: AuditMetrics) -> str:
     """Format metrics into a professional audit report."""
     return (
-        f"📊 **QUANT AUDIT REPORT**\n\n"
+        f"📊 *QUANT AUDIT REPORT*\n\n"
         f"| Metric | Value |\n"
         f"| :--- | :--- |\n"
         f"| Total Trades | `{metrics.total_trades}` |\n"
@@ -92,6 +102,8 @@ def format_audit_report(metrics: AuditMetrics) -> str:
         f"| Sharpe Ratio | `{metrics.sharpe_ratio}` |\n"
         f"| Max Drawdown | `{metrics.max_drawdown*100:.1f}%` |\n"
         f"| Expectancy/Trade | `${metrics.expectancy_per_trade:.4f}` |\n"
+        f"| Avg Win / Loss | `${metrics.avg_win} / ${metrics.avg_loss}` |\n"
+        f"| R-Multiple | `{metrics.r_multiple}` |\n"
         f"| Net PnL | `${metrics.total_pnl_net:+.2f}` |\n"
         f"| Avg Friction | `{metrics.avg_slippage*100:.1f}%` |\n\n"
         f"🛡️ *Status: Technically functional in test environment.*"

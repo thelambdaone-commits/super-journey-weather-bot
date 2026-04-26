@@ -34,22 +34,22 @@ class OuroborosNotifier:
     def notify_check(self, reason: str) -> bool:
         """Notify about check result (skip)."""
         return self.send(
-            "🐍 **OUROBOROS CHECK**\n"
+            "🐍 *OUROBOROS CHECK*\n"
             "──────────────\n"
-            f"⏸️ __ {reason} __"
+            f"⏸️ _ {reason} _"
         )
     
     def notify_start(self, new_resolutions: int, total_gems: int) -> bool:
         """Notify about retrain start."""
         return self.send(
-            "🔥 **GEM FACTORY STARTED**\n"
+            "🔥 *GEM FACTORY STARTED*\n"
             "──────────────\n"
-            "⚙️ **OPÉRATION**\n"
+            "⚙️ *OPÉRATION*\n"
             f"→ Résolutions: `{new_resolutions}`\n"
             f"→ GEMs: `{total_gems}` détectés\n"
             "→ Pipeline: `Train → Calibrate`\n"
             "──────────────\n"
-            "🏗️ __ Optimisation du modèle en cours... __"
+            "🏗️ _ Optimisation du modèle en cours... _"
         )
     
     def notify_success(
@@ -69,35 +69,35 @@ class OuroborosNotifier:
         gems_display = "\n".join(gems_list) if gems_list else "`Aucun`"
         
         return self.send(
-            "✅ **GEM FACTORY SUCCESS**\n"
+            "✅ *GEM FACTORY SUCCESS*\n"
             "──────────────\n"
-            "📊 **RÉSULTATS**\n"
+            "📊 *RÉSULTATS*\n"
             f"→ Dataset: `{trained_rows}` échantillons\n"
             f"→ Retrains/24h: `{retrain_count}`\n"
             "──────────────\n"
-            "💎 **GEMS PRODUITS**\n"
+            "💎 *GEMS PRODUITS*\n"
             f"{gems_display}\n"
             "──────────────\n"
-            "✨ __ Modèle mis à jour avec succès __"
+            "✨ _ Modèle mis à jour avec succès _"
         )
     
     def notify_failed(self, error: str, restored: bool = True) -> bool:
         """Notify about failed retrain with rollback."""
-        restore_msg = "🟢 __ Ancien modèle restauré __" if restored else "🔴 __ Échec de la restauration __"
+        restore_msg = "🟢 _ Ancien modèle restauré _" if restored else "🔴 _ Échec de la restauration _"
         return self.send(
-            "🚨 **OUROBOROS FAILED**\n"
+            "🚨 *OUROBOROS FAILED*\n"
             "──────────────\n"
-            "❌ **ERREUR SYSTÈME**\n"
+            "❌ *ERREUR SYSTÈME*\n"
             "→ Type: `Critical Failure`\n"
             f"→ Log: `{error[:100]}`\n"
             "──────────────\n"
-            "🛡️ **SÉCURITÉ**\n"
+            "🛡️ *SÉCURITÉ*\n"
             f"{restore_msg}"
         )
     
     def notify_skip(self, reason: str) -> bool:
         """Notify about skipped retrain."""
         return self.send(
-            "⏭️ **OUROBOROS SKIP**\n"
-            f"__ {reason} __"
+            "⏭️ *OUROBOROS SKIP*\n"
+            f"_ {reason} _"
         )

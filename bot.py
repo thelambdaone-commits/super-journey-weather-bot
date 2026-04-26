@@ -33,6 +33,8 @@ class TelegramFeedback:
         self.notifier = get_notifier()
 
     def emit(self, message: str) -> None:
+        # Always log to standard logger for audit
+        logging.getLogger("bot.feedback").info(message.strip())
         if self.tui_mode:
             print(message)
 
@@ -206,13 +208,13 @@ def send_test_message() -> bool:
     """Send a test message to Telegram."""
     notifier = get_notifier()
     result = notifier.send(
-        "🔔 **WEATHERBOT DIAGNOSTIC**\n"
+        "🔔 *WEATHERBOT DIAGNOSTIC*\n"
         "──────────────\n"
-        "📡 **TEST DE CONNEXION**\n"
+        "📡 *TEST DE CONNEXION*\n"
         "→ Statut: `Opérationnel`\n"
         "→ Latence: `Active`\n"
         "──────────────\n"
-        "✅ **Bot is working perfectly!**",
+        "✅ *Bot is working perfectly!*",
         parse_mode="Markdown"
     )
     print(f"Telegram test: {'OK' if result else 'FAILED'}")

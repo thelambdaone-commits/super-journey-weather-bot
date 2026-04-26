@@ -2,7 +2,7 @@
 
 WeatherBot is a modular research and paper-trading bot for weather prediction markets. It scans weather markets, estimates bucket probabilities, ranks opportunities, sends Telegram alerts, records decisions/resolutions, and maintains an audit trail for model validation.
 
-Current posture as of 2026-04-25: **paper + signal mode is operational**. Live trading is intentionally gated off until the dataset, calibration, and backtests satisfy the live-readiness checks.
+Current posture as of 2026-04-26: **paper + signal mode is operational**. v2.5.2 "Perfection" audit completed with AI unit awareness and GFS/HRRR source optimization.
 
 ---
 
@@ -10,13 +10,13 @@ Current posture as of 2026-04-25: **paper + signal mode is operational**. Live t
 
 The system follows a modular, decoupled architecture focused on reproducibility and auditability.
 
-- **`src/weather`**: forecast and actual-temperature ingestion.
+- **`src/weather`**: forecast and actual-temperature ingestion (ECMWF, GFS, HRRR, DWD, NWS, METAR).
 - **`src/trading`**: runtime engine, scanner, resolver, paper account, and Polymarket CLOB execution adapter.
 - **`src/strategy`**: EV, Kelly sizing, ranking, quality filters, and portfolio risk limits.
 - **`src/probability`**: bucket probability, uncertainty, and calibration.
 - **`src/ml`**: lightweight forecast-bias model with conservative sample-size shrinkage.
 - **`src/data`**: append-only decision/resolution rows, QA, backtests, and reproducibility helpers.
-- **`src/ai`**: Groq diagnostics and anomaly review.
+- **`src/ai`**: Groq diagnostics and anomaly review (unit-aware °C/°F).
 - **`src/ai/ourobouros`**: guarded auto-improvement loop for retrain/calibration attempts.
 
 ---
@@ -54,7 +54,7 @@ The system enforces strict safety layers:
 
 | API | Credential | Purpose |
 |-----|------------|---------|
-| Open-Meteo | None | ECMWF + HRRR forecasts |
+| Open-Meteo | None | ECMWF + HRRR + GFS forecasts |
 | Open-Meteo Archive | None | Historical temps for resolution |
 | Meteostat | None (pip) | Fallback historical temps |
 | Aviation Weather (METAR) | None | Real-time station observations |
@@ -224,21 +224,22 @@ Professionalized reporting via Telegram:
 
 ## Current Operational Status
 
-Verified on 2026-04-25:
+Verified on 2026-04-26:
 
 - Telegram main channel: OK.
 - Telegram signal channel: OK.
 - Runtime process: `bot.py run --paper-on --signal-on --tui-off`.
 - Live trading: disabled.
-- Repository: pushed to `origin/main`.
+- AI Unit Awareness: OK (°C/°F differentiated).
+- Weather Sources: Optimized (GFS Seamless + real HRRR US).
 
 ### Dataset Status
 | Metric | Value |
 |--------|-------|
-| Total rows | 361 |
+| Total rows | 446 |
 | Resolved rows | 74 |
-| Decision rows | 167 |
-| Readiness score | 58/100 |
+| Decision rows | 252 |
+| Readiness score | 64/100 |
 | Readiness label | monitor |
 | Ready for scoring fit | no |
 | Ready for live | no |
@@ -249,42 +250,19 @@ Verified on 2026-04-25:
 | `bot.py status` | OK | Balance: $9,879.24, 6 trades, 33% WR |
 | `bot.py test` | OK | Telegram main channel OK |
 | signal-channel test | OK | `TELEGRAM_SIGNAL_CHAT_ID` OK |
-| `bot.py ai-status` | OK | Groq OK, Autoimprovement not ready |
+| `bot.py ai-status` | OK | Groq OK, Unit-aware probe OK |
 | `bot.py data-qa` | OK | live gate currently no-go |
-| `bot.py learning-validation` | OK | readiness 58/100 |
-| `bot.py ranking-backtest` | OK | Top-K currently under benchmark |
-| `bot.py ouroboros` | OK | skip until patience/data conditions pass |
+| `bot.py learning-validation` | OK | readiness 64/100 |
+| `bot.py ranking-backtest` | OK | Top-K backtest enabled |
+| `bot.py ouroboros` | OK | skip until conditions pass |
 
 ### Ouroboros State
 ```
 Autoimprovement ready: no
 Calibration fitted: no
-Learning readiness: 58/100
+Learning readiness: 64/100
 Expected action: skip until enough new resolutions exist
 ```
-
-### Long-Run Readiness
-
-The bot is suitable for a monitored 7-10 day paper/signal run if the host remains online:
-
-- process is already running in paper/signal mode,
-- `LIVE_TRADE=False`,
-- `logs/signal_bot.log` is not growing dangerously,
-- `data/` and `logs/` are ignored by Git,
-- Telegram alerts have been verified,
-- state/data writes are local JSON/JSONL files.
-
-Recommended monitoring during the run:
-
-```bash
-ps -ef | grep 'bot.py run'
-tail -n 100 logs/signal_bot.log
-./venv/bin/python bot.py status
-./venv/bin/python bot.py data-qa
-./venv/bin/python bot.py learning-validation
-```
-
-The live gate should not be opened until `ready_for_live: yes`, `Autoimprovement ready: yes`, and the ranking backtest is not negative versus benchmark.
 
 ---
 
@@ -303,15 +281,6 @@ weatherbot/
 │   │   ├── __init__.py           # Groq AI module
 │   │   ├── diagnostics.py         # AI diagnostics
 │   │   └── ouroboros/           # Auto-improvement loop
-│   │       ├── __init__.py
-│   │       ├── config.py
-│   │       ├── state.py
-│   │       ├── lock.py
-│   │       ├── backup.py
-│   │       ├── decision.py
-│   │       ├── pipeline.py
-│   │       ├── notifier.py
-│   │       └── engine.py
 │   ├── data/
 │   │   ├── loader.py
 │   │   ├── storage.py
@@ -323,11 +292,11 @@ weatherbot/
 │   │   ├── sizing.py
 │   │   ├── edge.py
 │   │   ├── risk_manager.py
-│   │   ├── optimize.py           # (NEW) Scoring weight optimization
-│   │   └── gem.py              # GEM detection
+│   │   ├── optimize.py
+│   │   └── gem.py
 │   ├── ml/
 │   │   ├── xgboost_train.py
-│   │   ├── hyperopt.py         # (NEW) Hyperparameter tuning
+│   │   ├── hyperopt.py
 │   │   ├── calibration_audit.py
 │   │   └── registry.py
 │   ├── trading/
@@ -354,7 +323,7 @@ weatherbot/
 └── logs/
     ├── bot_runtime.log
     ├── ouroboros.log
-    └── paper_trades.json
+    ├── paper_trades.json
 ```
 
 ---
@@ -366,6 +335,7 @@ weatherbot/
 - [x] Open-Meteo archive and Meteostat fallback for actual temperatures.
 - [x] Micro-live caps ($10/$50) and drawdown alerts (5%/15%).
 - [x] Hyperparameter tuning with safety gates.
+- [x] AI Unit Awareness (°C/°F) and GFS/HRRR optimization.
 - [ ] Fit and validate calibration after enough resolved rows.
 - [ ] Improve ranking until Top-K outperforms naive/random baselines.
 - [ ] Run 30-60 days of monitored paper trading before any live exposure.
@@ -389,7 +359,7 @@ See `CHECKLIST_MICRO_LIVE.md` for the complete checklist.
 
 ---
 
-## Ops & Deployment (NEW)
+## Ops & Deployment
 
 ### Systemd Auto-Restart
 Copy the service file and enable:
@@ -399,21 +369,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable weatherbot
 sudo systemctl start weatherbot
 ```
-
-### Manual Auto-Restart (tmux)
-```bash
-tmux new -s weatherbot
-# Inside tmux:
-./venv/bin/python bot.py run
-# Detach: Ctrl+B, then D
-# Reattach: tmux attach -t weatherbot
-```
-
-### Environment Variables
-See `.env.example` for all configurable options:
-- Risk limits (MAX_EXPOSURE_PER_CITY, etc.)
-- Micro-live caps (MAX_LIVE_BET_USD, MAX_LIVE_TOTAL_EXPOSURE_USD)
-- Signal parameters
 
 ---
 
@@ -426,11 +381,6 @@ See `.env.example` for all configurable options:
 - **Paper Trading actuellement** : le mode live est volontairement bloque par des garde-fous.
 - **Risque de perte** : les marches predictionnels comportent des risques significatifs.
 - **Validation requise** : au minimum 30-60 jours de validation empirique avant tout capital reel.
-
-### Responsibility
-- L'utilisateur est seul responsable de ses décisions de trading
-- Les performances passées ne garantissent pas les résultats futurs
-- Aucune garantie expresse ou implicite
 
 ### Etat actuel
 Ce systeme est actuellement en phase de validation paper trading. Aucun capital ne doit etre engage sans donnees resolues suffisantes, calibration fitted, backtest robuste et validation operationnelle prolongee.

@@ -143,7 +143,7 @@ class WeatherCalibrator:
         if source in self.model.get("by_source", {}):
             return self.model["by_source"][source]
         
-        return {"mean": 0.0, "std": DEFAULT_SIGMA.get("C", 2.0), "mae": 2.0, "bias": 0.0, "n": 0}
+        return {"mean": 0.0, "bias": 0.0, "n": 0}
     
     def score(
         self,
