@@ -23,6 +23,7 @@ class PipelineRunner:
         cmd_map = {
             "train": ["venv/bin/python3", "bot.py", "train"],
             "calibrate": ["venv/bin/python3", "bot.py", "calibrate"],
+            "tune": ["venv/bin/python3", "bot.py", "tune"],
             "ai-status": ["venv/bin/python3", "bot.py", "ai-status"],
         }
         
@@ -42,7 +43,7 @@ class PipelineRunner:
             
             output = result.stdout + result.stderr
             return (result.returncode == 0), output
-                
+            
         except subprocess.TimeoutExpired:
             return False, f"Timeout après {self.timeout}s"
         except Exception as e:
@@ -60,11 +61,19 @@ class PipelineRunner:
                 digest.update(b"<missing>")
         return "sha256_" + digest.hexdigest()[:16]
     
-    def run_full_pipeline(self) -> tuple[bool, dict]:
+    def run_full_pipeline(self, include_tuning: bool = False) -> tuple[bool, dict]:
         """
-        Run full pipeline: train -> calibrate -> registry update.
+        Run full pipeline: [tune ->] train -> calibrate -> registry update.
+        
+        Args:
+            include_tuning: If True, run tuning before train
         """
         results = {}
+        
+        # 0. Optional tuning
+        if include_tuning:
+            success, output = self.run("tune")
+            results["tune"] = {"success": success, "output": output[:500]}
         
         # 1. Train
         success, output = self.run("train")
@@ -80,8 +89,6 @@ class PipelineRunner:
 
         # 3. Governance: Register the new version
         try:
-            # Extract basic metrics from output if possible (placeholder)
-            # In a real v3.0, bot.py train would return JSON metrics
             metrics = {"status": "success", "source": "ouroboros_auto"}
             data_hash = self._stable_data_hash()
             

@@ -526,6 +526,30 @@ if __name__ == "__main__":
         config = get_config()
         model = create_engine().ml_model
         print(f"ML model trained: samples={model.get('samples', 0)} cities={model.get('cities', 0)} file={config.data_dir}/ml_model.json")
+    elif cmd == "tune":
+        import argparse
+        parser = argparse.ArgumentParser(description="XGBoost hyperparameter tuning")
+        parser.add_argument("--search", type=str, default="random", choices=["grid", "random"])
+        parser.add_argument("--trials", type=int, default=32)
+        parser.add_argument("--timeout", type=int, default=300)
+        parser.add_argument("--min-improvement", type=float, default=0.01)
+        args, _ = parser.parse_known_args()
+        
+        from src.ml.hyperopt import run_tuning, format_tuning_report
+        result = run_tuning(
+            data_dir="data",
+            search_type=args.search,
+            max_trials=args.trials,
+            timeout=args.timeout,
+            min_improvement=args.min_improvement,
+        )
+        for line in format_tuning_report(result):
+            print(line)
+        
+        if result.accepted:
+            print("\n✅ Params accepted - saved to tuning history")
+        else:
+            print("\n❌ Params rejected - keeping baseline")
     elif cmd == "data-qa":
         print_data_qa()
     elif cmd == "backfill":
@@ -536,6 +560,15 @@ if __name__ == "__main__":
         print_ai_status()
     elif cmd == "ranking-backtest":
         run_ranking_backtest()
+    elif cmd == "optimize-weights":
+        from src.strategy.optimize import run_grid_search
+        result = run_grid_search(min_snapshots=50)
+        if result is None:
+            print("Not enough data for weight optimization (need >= 50 eligible snapshots)")
+        else:
+            print(f"Best weights: {result['best_weights']}")
+            print(f"Outperformance: {result['outperformance']:+.4f}")
+            print("Written to data/scoring_weights.json and applied to src/strategy/scoring.py")
     elif cmd == "learning-validation":
         print_learning_validation()
     elif cmd == "ouroboros":
@@ -574,4 +607,4 @@ if __name__ == "__main__":
                     count += 1
             print(f"✅ Terminé: {count} messages supprimés.")
     else:
-        print("Usage: python bot.py [run|status|report|resolve|test|train|data-qa|backfill|calibrate|ai-status|ranking-backtest|learning-validation|purge] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")
+        print("Usage: python bot.py [run|status|report|resolve|test|train|data-qa|backfill|calibrate|ai-status|ranking-backtest|optimize-weights|learning-validation|purge|tune] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")

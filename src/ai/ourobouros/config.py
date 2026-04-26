@@ -15,9 +15,12 @@ class OuroborosConfig:
     
     # Limits
     max_retrain_per_day: int = 2
+    max_tuning_per_day: int = 1
     
     # Safety
     timeout: int = 300  # seconds
+    tuning_timeout: int = 300
+    tuning_min_improvement: float = 0.01
     
     # GEM thresholds
     gem_gold_threshold: float = 0.95

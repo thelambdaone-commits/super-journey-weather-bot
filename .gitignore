@@ -40,3 +40,5 @@ data_test/
 *.pid
 *.lock
 data/backups/
+data/tuning_history.jsonl
+data/best_hyperparams.json

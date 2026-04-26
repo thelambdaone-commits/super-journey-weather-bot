@@ -41,6 +41,8 @@ class RankingBacktestReport:
     pnl_95_ci: tuple[float, float] = (0.0, 0.0)
     city_breakdown: dict[str, float] = None
     horizon_breakdown: dict[str, float] = None
+    source_breakdown: dict[str, float] = None
+    conf_breakdown: dict[str, float] = None
     windows: list[dict] = None
 
 
@@ -159,9 +161,11 @@ class RankingBacktester:
         naive_pnls: list[float] = []
         eligible_snapshots = 0
 
-        # Walk-forward over groups that can actually be scored. Splitting over
-        # unresolved future dates makes the report look like the model has zero
-        # eligible samples even when resolved decision cohorts exist.
+        city_pnl_map: dict[str, list[float]] = defaultdict(list)
+        horizon_pnl_map: dict[str, list[float]] = defaultdict(list)
+        source_pnl_map: dict[str, list[float]] = defaultdict(list)
+        conf_bucket_pnl_map: dict[str, list[float]] = defaultdict(list)
+
         sorted_keys = []
         for key in sorted(groups.keys()):
             paired_count = sum(1 for row in groups[key] if row.market_id in resolved)
@@ -170,7 +174,6 @@ class RankingBacktester:
         split_idx = int(len(sorted_keys) * 0.7)
         test_keys = sorted_keys[split_idx:] if len(sorted_keys) >= 3 else sorted_keys
         
-        # We only report on Test (Out-of-Sample)
         for key in test_keys:
             candidates = groups[key]
             scored: list[tuple[float, DatasetRow, bool, float]] = []
@@ -210,13 +213,27 @@ class RankingBacktester:
             random_hits.append(sum(1 for item in random_pick if item[2]) / len(random_pick))
             all_hits.append(sum(1 for item in scored if item[2]) / len(scored))
             
-            # Naive Strategy: Pick the outcome with highest raw probability
             naive_pick = sorted(scored, key=lambda item: (item[1].market_implied_prob or 0), reverse=True)[:top_k]
             naive_pnls.append(sum(item[3] for item in naive_pick))
 
             for rank, item in enumerate(top, start=1):
                 rank_hit_map[rank].append(1 if item[2] else 0)
                 rank_pnl_map[rank].append(item[3])
+
+            for _, row, won, pnl in scored:
+                city_pnl_map[row.city or "unknown"].append(pnl)
+                horizon = row.forecast_horizon or "unknown"
+                horizon_pnl_map[horizon].append(pnl)
+                source = row.forecast_source or "unknown"
+                source_pnl_map[source].append(pnl)
+                conf = row.confidence if row.confidence is not None else 0.0
+                if conf < 0.3:
+                    bucket = "low"
+                elif conf < 0.6:
+                    bucket = "medium"
+                else:
+                    bucket = "high"
+                conf_bucket_pnl_map[bucket].append(pnl)
 
         rank_hit_rates = [
             (rank, round(mean(values), 4))
@@ -242,6 +259,19 @@ class RankingBacktester:
             pnl_ci = (top_k_avg_pnl - 1.96 * pnl_std / math.sqrt(len(top_k_pnls)),
                       top_k_avg_pnl + 1.96 * pnl_std / math.sqrt(len(top_k_pnls)))
 
+        city_breakdown = {
+            city: round(mean(pnls), 4) for city, pnls in sorted(city_pnl_map.items()) if pnls
+        }
+        horizon_breakdown = {
+            h: round(mean(pnls), 4) for h, pnls in sorted(horizon_pnl_map.items()) if pnls
+        }
+        source_breakdown = {
+            src: round(mean(pnls), 4) for src, pnls in sorted(source_pnl_map.items()) if pnls
+        }
+        conf_breakdown = {
+            bucket: round(mean(pnls), 4) for bucket, pnls in sorted(conf_bucket_pnl_map.items()) if pnls
+        }
+
         return RankingBacktestReport(
             dataset_path=str(self.dataset_path),
             rows=len(rows),
@@ -262,10 +292,38 @@ class RankingBacktester:
             benchmark_outperformance=round(top_k_avg_pnl - naive_avg_pnl, 4),
             pnl_std=round(pnl_std, 4),
             pnl_95_ci=(round(pnl_ci[0], 4), round(pnl_ci[1], 4)),
-            city_breakdown={},
-            horizon_breakdown={},
+            city_breakdown=city_breakdown,
+            horizon_breakdown=horizon_breakdown,
+            source_breakdown=source_breakdown,
+            conf_breakdown=conf_breakdown,
             windows=[]
         )
+
+
+def should_promote_ranking(report: RankingBacktestReport, min_outperformance: float = 0.0) -> tuple[bool, str]:
+    """
+    Determine if ranking should be promoted based on backtest.
+    
+    Args:
+        report: RankingBacktestReport from run()
+        min_outperformance: Minimum outperformance vs naive (default 0.0)
+    
+    Returns:
+        (should_promote: bool, reason: str)
+    """
+    if report.eligible_snapshots < 10:
+        return False, f"Insufficient snapshots: {report.eligible_snapshots}/10"
+    
+    if report.benchmark_outperformance < min_outperformance:
+        return False, f"No outperformance: {report.benchmark_outperformance:+.4f} < {min_outperformance:+.4f}"
+    
+    if report.top_k_avg_hit_rate < 0.40:
+        return False, f"Low hit rate: {report.top_k_avg_hit_rate:.1%} < 40%"
+    
+    if report.score_pnl_correlation < 0.1:
+        return False, f"Weak correlation: {report.score_pnl_correlation:+.4f} < 0.1"
+    
+    return True, f"Ready: outperformance={report.benchmark_outperformance:+.4f}, hit_rate={report.top_k_avg_hit_rate:.1%}, corr={report.score_pnl_correlation:+.4f}"
 
 
 def format_ranking_report(report: RankingBacktestReport) -> list[str]:
@@ -299,5 +357,35 @@ def format_ranking_report(report: RankingBacktestReport) -> list[str]:
             lines.append(f" - rank {rank}: {value:+.4f}")
     else:
         lines.append(" - no ranked samples")
+    lines.append("")
+    lines.append("City breakdown (avg PnL):")
+    if report.city_breakdown:
+        for city, pnl in sorted(report.city_breakdown.items(), key=lambda x: x[1], reverse=True):
+            lines.append(f" - {city}: {pnl:+.4f}")
+    else:
+        lines.append(" - no data")
+    lines.append("")
+    lines.append("Horizon breakdown (avg PnL):")
+    if report.horizon_breakdown:
+        for horizon, pnl in sorted(report.horizon_breakdown.items()):
+            lines.append(f" - {horizon}: {pnl:+.4f}")
+    else:
+        lines.append(" - no data")
+    lines.append("")
+    lines.append("Source breakdown (avg PnL):")
+    if report.source_breakdown:
+        for src, pnl in sorted(report.source_breakdown.items(), key=lambda x: x[1], reverse=True):
+            lines.append(f" - {src}: {pnl:+.4f}")
+    else:
+        lines.append(" - no data")
+    lines.append("")
+    lines.append("Confidence bucket breakdown (avg PnL):")
+    if report.conf_breakdown:
+        for bucket, pnl in sorted(report.conf_breakdown.items()):
+            lines.append(f" - {bucket}: {pnl:+.4f}")
+    else:
+        lines.append(" - no data")
+    lines.append("")
+    lines.append(f"95% CI: [{report.pnl_95_ci[0]:+.4f}, {report.pnl_95_ci[1]:+.4f}]")
     lines.append(f"{'='*50}\n")
     return lines
