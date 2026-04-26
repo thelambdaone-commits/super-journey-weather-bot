@@ -115,12 +115,17 @@ class TradingEngine:
         state = self.storage.load_state()
         drawdown = (state.peak_balance - state.balance) / state.peak_balance if state.peak_balance > 0 else 0
         
-        # 1. Max Drawdown Kill Switch (15%)
+        # 1. Telegram Alert for 5% Drawdown Warning
+        if drawdown > 0.05:
+            self.feedback.notify_health(f"⚠️ DRAWDOWN WARNING: {drawdown*100:.1f}%")
+        
+        # 2. Max Drawdown Kill Switch (15%)
         if drawdown > 0.15:
             self.emit(f"🚨 RISK ALERT: Max Drawdown exceeded ({drawdown*100:.1f}%)")
+            self.feedback.notify_stopped("max_drawdown_15pct")
             return False
             
-        # 2. Daily Loss Limit (Placeholder for daily tracking)
+        # 3. Daily Loss Limit (Placeholder for daily tracking)
         # Only count losses, not gains (max(0, -pnl))
         daily_loss_pct = max(0.0, -state.daily_pnl) / state.starting_balance if state.starting_balance > 0 else 0.0
         if daily_loss_pct > 0.05: # 5% daily loss limit

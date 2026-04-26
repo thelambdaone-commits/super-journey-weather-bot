@@ -187,6 +187,13 @@ class MarketScanner:
                             self.engine.config.kelly_fraction,
                             self.engine.config.max_bet,
                         )
+                        
+                        # Micro-Live Cap: Override Kelly if in live mode
+                        if self.engine.config.live_trade:
+                            cap = getattr(self.engine.config, 'max_live_bet_usd', 10.0)
+                            if size > cap:
+                                self.engine.emit(f"[MICRO-LIVE CAP] ${size:.2f} -> ${cap:.2f}")
+                                size = cap
 
                         if size >= 0.50:
                             signal = self.build_signal(outcome, probability_estimate, edge_estimate, features, kelly, size, forecast_temp, best_source)

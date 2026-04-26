@@ -1,0 +1,17 @@
+[Unit]
+Description=WeatherBot Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/74h2hfpyj79x/weatherbot
+Environment="PATH=/home/74h2hfpyj79x/weatherbot/venv/bin"
+ExecStart=/home/74h2hfpyj79x/weatherbot/venv/bin/python /home/74h2hfpyj79x/weatherbot/bot.py run
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/74h2hfpyj79x/weatherbot/logs/bot_runtime.log
+StandardError=append:/home/74h2hfpyj79x/weatherbot/logs/bot_runtime.log
+
+[Install]
+WantedBy=multi-user.target

@@ -46,6 +46,10 @@ class Config:
     signal_min_price_move: float = 0.02
     signal_top_k: int = 3
     
+    # Micro-Live Caps (hard limits - override Kelly)
+    max_live_bet_usd: float = 10.0  # $10 per trade max for micro-live
+    max_live_total_exposure_usd: float = 50.0  # $50 total max for micro-live
+    
     # API Keys
     meteoblue_key: str = ""
     weatherbit_key: str = ""
