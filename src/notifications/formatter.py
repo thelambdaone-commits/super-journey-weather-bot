@@ -4,6 +4,10 @@ Notification Formatter - Bridge to Premium V2 Telegram Templates.
 from __future__ import annotations
 from . import telegram_control_center as tg
 
+def format_weather_signal(payload: dict) -> str:
+    """Wrapper for legacy calls."""
+    return f"🚀 SIGNAL: {payload.get('city')} {payload.get('market_name')} | Edge: {payload.get('edge'):+.1f}%"
+
 def format_signal_for_telegram(signal_dict: dict) -> bool:
     """
     Bridge from scanner/engine to the Premium Signal template.
@@ -20,7 +24,7 @@ def format_signal_for_telegram(signal_dict: dict) -> bool:
             reason=signal_dict.get("reasons", None)
         )
         return True
-    except Exception:
+    except (Exception):
         return False
 
 def format_daily_recap(stats: dict) -> bool:

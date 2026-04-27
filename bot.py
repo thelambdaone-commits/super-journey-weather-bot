@@ -9,7 +9,7 @@ import sys
 import logging
 import os
 from datetime import datetime, timezone
-from src.notifications.telegram_control_center import crash_alert
+from src.notifications.telegram_control_center import send_crash as crash_alert
 
 import backfill as backfill_cli
 from src.ai.diagnostics import format_ai_diagnostics, run_ai_diagnostics
@@ -635,6 +635,6 @@ if __name__ == "__main__":
         main()
     except (KeyboardInterrupt, SystemExit):
         sys.exit(0)
-    except Exception as e:
+    except (Exception) as e:
         crash_alert(e)
         raise

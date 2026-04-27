@@ -41,7 +41,7 @@ def send_message(text: str) -> bool:
     try:
         with urlopen(req, timeout=TIMEOUT) as r:
             return r.status == 200
-    except Exception:
+    except (Exception):
         return False
 
 # =====================================================

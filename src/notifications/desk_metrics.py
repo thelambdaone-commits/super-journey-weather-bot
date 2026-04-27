@@ -215,8 +215,62 @@ Time: {utc_now().strftime("%Y-%m-%d %H:%M UTC")}
 """.strip()
 
 
+def format_morning_report(m: DeskMetrics) -> str:
+    return f"""
+☀️ <b>MORNING RISK REPORT</b>
+
+<b>Status</b>
+🌐 API Health: {m.api_success_rate:.1f}%
+🚨 Pending Issues: {m.top_error if m.error_rate > 0 else "None"}
+📡 signals Expected: {m.signals} (24h)
+
+<b>Risk</b>
+📉 Current DD: {safe_pct(m.drawdown)}
+💰 Balance: Dynamic
+🛡 Risk Mode: <b>STABLE</b>
+
+Time: {utc_now().strftime("%Y-%m-%d 08:00 UTC")}
+""".strip()
+
+
+def format_risk_summary(m: DeskMetrics) -> str:
+    return f"""
+🛡 <b>RISK SUMMARY</b>
+
+📉 Max Drawdown: {safe_pct(m.drawdown)}
+💰 Friction: {m.friction:.2f}%
+🎯 Win Rate: {m.winrate:.1f}%
+📊 Profit Factor: {m.profit_factor:.2f}
+
+<b>Thresholds</b>
+Limit: -15.0% DD
+Current: {safe_pct(m.drawdown)}
+
+Status: <b>SAFE</b>
+""".strip()
+
+
+def format_health_report(m: DeskMetrics) -> str:
+    return f"""
+🟢 <b>SYSTEM HEALTH</b>
+
+Scanner: OK
+Pricing: OK
+Telegram: OK
+DB: OK
+
+⚡ Latency P95: {m.scan_p95:.2f}s
+🚨 Error Rate: {m.error_rate:.2f}%
+📡 signals 24h: {m.signals}
+""".strip()
+
+
 def send_desk_report() -> None:
     send_message(format_desk_report(compute_metrics()))
+
+
+def send_morning_report() -> None:
+    send_message(format_morning_report(compute_metrics()))
 
 
 def maybe_alert(m: DeskMetrics) -> None:

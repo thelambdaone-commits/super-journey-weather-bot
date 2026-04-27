@@ -45,7 +45,7 @@ class TelegramNotifier:
         try:
             r = requests.get(url, timeout=5)
             return r.ok
-        except (Exception,) as e:
+        except (Exception) as e:
             return False
     
     def delete_message(self, message_id: int, chat_id: Optional[str] = None) -> bool:
@@ -62,7 +62,7 @@ class TelegramNotifier:
         try:
             response = requests.post(url, json=payload, timeout=5)
             return response.ok
-        except (Exception,) as e:
+        except (Exception) as e:
             return False
 
     def send(self, message: str, parse_mode: Optional[str] = None, chat_id: Optional[str] = None) -> Optional[int]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import json
 from pathlib import Path
-from .idempotence import IdempotencyGuard
+from .idempotence import get_idempotence_manager
 from src.notifications.telegram_control_center import send_trust_update
 from src.notifications.desk_metrics import log_event
 from datetime import datetime, timezone, timedelta
