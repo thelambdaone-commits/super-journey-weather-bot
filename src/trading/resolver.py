@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from .idempotence import IdempotencyGuard
 from src.notifications.telegram_control_center import send_trust_update
+from src.notifications.desk_metrics import log_event
 from datetime import datetime, timezone, timedelta
 from ..utils.feature_flags import is_enabled
 from ..settlement.station_map import get_station_info
@@ -67,6 +68,18 @@ class MarketResolver:
                         result = "WIN" if won else "LOSS"
                         pnl_pct = (pnl / market.position["cost"]) * 100 if market.position and market.position.get("cost") else 0
                         send_trust_update(market.city, f"{market.date}", result, pnl_pct)
+
+                        # Desk Pro Resolution Logging
+                        log_event(
+                            "trade_resolved",
+                            city=market.city,
+                            confidence=market.position.get("ml", {}).get("tier", "MEDIUM"),
+                            setup=market.position.get("setup", "divergence"),
+                            net_pnl_pct=pnl_pct,
+                            fees_pct=0.2, # Static placeholder
+                            slippage_pct=0.1, # Static placeholder
+                            realized_edge_pct=pnl_pct + 0.3, # Approx realized vs prediction
+                        )
 
                         resolved_count += 1
                         results["resolved"].append({

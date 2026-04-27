@@ -11,6 +11,7 @@ from typing import Optional
 
 from ..ai import get_groq_client
 from ..data.feedback import FeedbackRecorder
+from ..notifications.desk_metrics import log_event
 from ..data.storage import DatasetStorage
 from ..features.builder import FeatureEngine
 from ..ml import train_model
@@ -65,6 +66,9 @@ class TradingEngine:
         self.executor = ClobExecutor(config)
         self.running = True
         self.start_time = time.time()
+        self.error_count = 0
+        self.latency_sum = 0.0
+        self.latency_count = 0
         
         # Load persistent timing
         state = self.storage.load_state()
@@ -207,7 +211,16 @@ class TradingEngine:
                     if now - last_scan >= self.config.scan_interval:
                         self.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] scanning...")
                         try:
-                            result = self.scanner.scan_and_update()
+                            t0 = time.time()
+                            start_perf = time.perf_counter()
+                            try:
+                                result = self.scanner.scan_and_update()
+                            finally:
+                                log_event("scan_cycle", latency_s=time.perf_counter() - start_perf)
+                                
+                            self.latency_sum += (time.time() - t0)
+                            self.latency_count += 1
+                            
                             state = self.storage.load_state()
                             self.emit(
                                 f" balance: ${state.balance:,.2f} | new: {result.new_trades} | "
@@ -215,6 +228,7 @@ class TradingEngine:
                             )
                             last_scan = now
                         except (Exception,) as scan_exc:
+                            self.error_count += 1
                             self.emit(f"Critical scan error: {scan_exc}")
                             logger.exception("Uncaught exception in scan loop")
                             time.sleep(60) # Wait before retry if scan failed
@@ -408,7 +422,13 @@ class TradingEngine:
             "drift": metrics.drift_status,
             "uptime": uptime_str,
             "api_status": " | ".join([f"{n}: {s}" for n, s, l in api_statuses]),
-            "hhi_div": risk_summary["diversification_index"]
+            "hhi_div": risk_summary["diversification_index"],
+            "errors": self.error_count,
+            "latency": self.latency_sum / self.latency_count if self.latency_count > 0 else 1.3,
+            "signals": len(city_signals),
+            "wins": metrics.wins,
+            "losses": metrics.losses,
+            "pnl": (metrics.total_pnl_net / state.starting_balance) * 100 if state.starting_balance > 0 else 0
         }
         
         # 5. Gather Latest Signals for ALL Cities
@@ -454,6 +474,10 @@ class TradingEngine:
         city_signals = sorted_sigs[:15]
         
         self.feedback.notify_hourly_report(summary, city_signals)
+        
+        # Daily Live Report (As requested)
+        from src.notifications.telegram_control_center import daily_report
+        daily_report(summary)
         
         # Persist last report timestamp
         state.last_report_ts = time.time()

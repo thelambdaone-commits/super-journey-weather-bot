@@ -8,6 +8,8 @@ import requests
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 from .locations import Location, get_by_slug, get_timezone, get_forecast_priority
+from src.notifications.telegram_control_center import send_incident
+from src.notifications.desk_metrics import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +37,14 @@ def get_ecmwf(city_slug: str, dates: list[str]) -> Dict[str, float]:
         try:
             data = requests.get(url, timeout=(5, 10)).json()
             if "error" not in data:
+                log_event("api_call", provider="ECMWF", ok=True, latency_s=1.0) # Placeholder for now
                 for date, temp in zip(data["daily"]["time"], data["daily"]["temperature_2m_max"]):
                     if date in dates and temp is not None:
                         result[date] = round(temp, 1) if loc.unit == "C" else round(temp)
             return result
         except (Exception,) as e:
+            log_event("api_call", provider="ECMWF", ok=False, error=str(e), latency_s=0.0)
+            log_event("error", error_type="network", module="weather.apis", message=f"ECMWF attempt {attempt} failed: {e}")
             if attempt < 2:
                 time.sleep(1)
     raise WeatherAPIError(f"ECMWF failed after 3 attempts")
@@ -222,11 +227,36 @@ def get_forecasts(city_slug: str, dates: list[str]) -> Dict[str, Dict]:
     """Get multi-source forecasts with fallback."""
     now = datetime.now(timezone.utc).isoformat()
     
-    ecmwf = get_ecmwf(city_slug, dates)
-    hrrr = get_hrrr(city_slug, dates)
-    gfs = get_gfs(city_slug, dates)
-    dwd = get_dwd(city_slug, dates)
-    nws = get_nws(city_slug, dates)
+    try:
+        ecmwf = get_ecmwf(city_slug, dates)
+    except (Exception,) as e:
+        logger.warning(f"ECMWF failed for {city_slug}: {e}")
+        send_incident(f"ECMWF degraded for {city_slug}. Fallback active.")
+        ecmwf = {}
+
+    try:
+        hrrr = get_hrrr(city_slug, dates)
+    except (Exception,) as e:
+        logger.warning(f"HRRR failed for {city_slug}: {e}")
+        hrrr = {}
+
+    try:
+        gfs = get_gfs(city_slug, dates)
+    except (Exception,) as e:
+        logger.warning(f"GFS failed for {city_slug}: {e}")
+        gfs = {}
+
+    try:
+        dwd = get_dwd(city_slug, dates)
+    except (Exception,) as e:
+        logger.warning(f"DWD failed for {city_slug}: {e}")
+        dwd = {}
+
+    try:
+        nws = get_nws(city_slug, dates)
+    except (Exception,) as e:
+        logger.warning(f"NWS failed for {city_slug}: {e}")
+        nws = {}
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     
     snapshots = {}

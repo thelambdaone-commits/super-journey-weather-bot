@@ -20,6 +20,8 @@ class AuditMetrics:
     r_multiple: float
     total_fees: float
     avg_slippage: float
+    wins: int = 0
+    losses: int = 0
     drift_status: str = "stable" # stable, degrading, critical
     uptime_pct: float = 100.0
 
@@ -87,6 +89,8 @@ def calculate_audit_metrics(trades: List[dict], starting_balance: float) -> Audi
         r_multiple=round(r_multiple, 2),
         total_fees=0.0, # Placeholder
         avg_slippage=0.015, # Based on PaperAccount simulation
+        wins=len(wins),
+        losses=len(losses),
         drift_status=drift_status
     )
 

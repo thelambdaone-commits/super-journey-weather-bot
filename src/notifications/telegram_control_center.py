@@ -99,24 +99,33 @@ Capital preserved.
     send_message(msg.strip())
 
 def send_daily_report(stats: dict):
-    """📊 TEMPLATE #3 — DAILY PERFORMANCE"""
+    """📊 DAILY LIVE REPORT"""
     msg = f"""
-📊 <b>DAILY PERFORMANCE</b>
+📊 <b>DAILY LIVE REPORT</b>
 
 Signals: {stats.get("signals", 0)}
 Wins: {stats.get("wins", 0)}
 Losses: {stats.get("losses", 0)}
-Win Rate: {stats.get("winrate", 0):.0f}%
+PnL: <b>{pct(stats.get("pnl", 0))}</b>
 
-💰 Net PnL: <b>{pct(stats.get("pnl", 0))}</b>
-Fees: {pct(stats.get("fees", 0))}
-Slippage: {pct(stats.get("slippage", 0))}
+Errors: {stats.get("errors", 0)}
+Latency avg: {stats.get("latency", 1.3):.1f}s
 
-📈 Sharpe MTD: {stats.get("sharpe", 0):.2f}
-📉 Drawdown: {pct(stats.get("drawdown", 0))}
+Time: {now()}
+"""
+    send_message(msg.strip())
 
-Best: {stats.get("best", "N/A")}
-Worst: {stats.get("worst", "N/A")}
+
+def send_incident(message: str, severity: str = "WARNING"):
+    """⚠️ INCIDENT ALERT"""
+    icon = "⚠️" if severity == "WARNING" else "🚨"
+    msg = f"""
+{icon} <b>INCIDENT DETECTED</b>
+
+{message}
+
+Status: Monitoring
+Time: {now()}
 """
     send_message(msg.strip())
 

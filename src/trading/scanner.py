@@ -27,6 +27,7 @@ from .helpers import (
 )
 from .polymarket import get_vwap_for_size
 from src.notifications.telegram_control_center import send_no_trade
+from src.notifications.desk_metrics import log_event
 from .types import ScanResult
 
 if TYPE_CHECKING:
@@ -286,6 +287,15 @@ class MarketScanner:
                                             balance -= signal["cost"] * (1 + TRADING_FEE_PERCENT)
                                             market.position = signal
                                             state.total_trades += 1
+                                            # Signal logging (Desk Pro)
+                                            log_event(
+                                                "signal",
+                                                city=city_slug,
+                                                confidence=features.get("ml_conf_tier", "MEDIUM"),
+                                                edge_pct=edge_estimate.adjusted_ev * 100,
+                                                spread_pct=outcome.get("spread", 0.0) * 100,
+                                                setup=outcome.get("setup_type", "divergence"),
+                                            )
                                             result.new_trades += 1
                                             self.engine.feedback.notify_trade_open(
                                                 loc.name, date_str, f"{signal['bucket_low']}-{signal['bucket_high']}{unit_sym}",
