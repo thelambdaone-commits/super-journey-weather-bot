@@ -225,9 +225,9 @@ class TelegramNotifier:
             f"──────────────\n"
             f"💰 *Performance & Risque*\n"
             f"→ PnL Total: `{summary['pnl_total']:+.2f}$` ({summary['pnl_pct']:+.2f}%)\n"
-            f"→ Profit Factor: `{summary.get('pf', 0.0)}` | Sharpe: `{summary.get('sharpe', 0.0)}`\n"
-            f"→ Avg Win/Loss: `${summary.get('avg_win', 0)} / ${summary.get('avg_loss', 0)}`\n"
-            f"→ Max DD: `{summary['drawdown']:.1f}%` | Expo: `{summary['exposure']:.2f}$`\n"
+            f"→ Profit Factor: `{summary.get('pf', 0.0):.2f}` | Sharpe: `{summary.get('sharpe', 0.0):.2f}`\n"
+            f"→ Avg Win/Loss: `${summary.get('avg_win', 0):.2f} / ${summary.get('avg_loss', 0):.2f}`\n"
+            f"→ Max DD: `{summary['drawdown']:.2f}%` | Expo: `{summary['exposure']:.2f}$`\n"
             f"→ Drift: `{summary['drift'].upper()}`\n"
             f"──────────────\n"
             f"📡 *Statut Système*\n"
@@ -242,7 +242,7 @@ class TelegramNotifier:
             for s in city_signals[:10]: # Limit to 10 for readability
                 safe_city = escape_markdown(s['city'])
                 msg += (
-                    f"• {safe_city.upper()} | {s['edge']:+.1f}% edge | {s['conf']}% conf\n"
+                    f"• {safe_city.upper()} | {s['edge']:+.2f}% edge | {s['conf']:.2f}% conf\n"
                     f"  Prix: {s['price']:.2f}$ | Risk: {s['risk']}\n"
                 )
             if len(city_signals) > 10:
@@ -262,7 +262,7 @@ class TelegramNotifier:
         
         msg = (
             f"💎 *ALERTE PRIORITAIRE : SIGNAL GEM* 💎\n"
-            f"⏰ {now} | Confiance: {signal['conf']}%\n"
+            f"⏰ {now} | Confiance: {signal['conf']:.2f}%\n"
             f"──────────────\n"
             f"📍 *Ville:* {safe_city.upper()}\n"
             f"🏦 *Marché:* {safe_question}\n"

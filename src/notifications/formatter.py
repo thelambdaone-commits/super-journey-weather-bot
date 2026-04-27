@@ -31,7 +31,7 @@ def _format_reason_lines(reason_lines: list[str]) -> str:
 
 def format_weather_signal(payload: dict) -> str:
     """Render a premium, trade-ready weather signal message in French with Markdown."""
-    confidence_pct = _format_percent(payload.get("confidence"), 0)
+    confidence_pct = _format_percent(payload.get("confidence"), 2)
     score = payload.get("signal_score")
     score_text = "n/a" if score is None else f"{score:.2f}"
     rank = payload.get("rank")
@@ -52,10 +52,10 @@ def format_weather_signal(payload: dict) -> str:
         f"→ Source: *{(payload.get('forecast_source') or 'n/a').upper()}* | biais `{source_bias_text}`\n\n"
         f"📊 *Marché vs Modèle*\n"
         f"→ Bucket: `{payload.get('bucket', 'n/a')}`\n"
-        f"→ Modèle: *{_format_percent(payload.get('calibrated_prob'))}*\n"
-        f"→ Marché: *{_format_percent(payload.get('market_prob'))}*\n\n"
+        f"→ Modèle: *{_format_percent(payload.get('calibrated_prob'), 2)}*\n"
+        f"→ Marché: *{_format_percent(payload.get('market_prob'), 2)}*\n\n"
         f"⚡ *Edge*\n"
-        f"→ `{_format_percent(payload.get('edge'))}` (*{payload.get('priority', 'NORMAL')}*)\n"
+        f"→ `{_format_percent(payload.get('edge'), 2)}` (*{payload.get('priority', 'NORMAL')}*)\n"
         f"→ Signal Score: `{score_text}`\n"
         f"→ Rang: `{rank_text}`\n\n"
         f"📈 *Confiance*\n"

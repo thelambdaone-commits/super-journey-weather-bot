@@ -3,17 +3,17 @@ Strategy filters with stricter thresholds.
 """
 
 # Stricter thresholds for live trading
-MIN_EV = 0.06  # 6% minimum EV
-MAX_SPREAD = 0.03  # 3% maximum spread
-MIN_VOLUME = 5000  # $5000 minimum volume
-MIN_CONFIDENCE = 0.30  # 30% minimum confidence
+MIN_EV = 0.04  # 4% minimum EV
+MAX_SPREAD = 0.07  # 7% maximum spread
+MIN_VOLUME = 300  # $300 minimum volume
+MIN_CONFIDENCE = 0.15  # 15% minimum confidence
 
 
 def should_skip_outcome(config, outcome: dict, features: dict, adjusted_ev: float) -> bool:
     """Return True when the candidate market should be skipped."""
-    min_ev = max(float(getattr(config, "min_ev", MIN_EV)), MIN_EV)
-    max_spread = min(float(getattr(config, "max_slippage", MAX_SPREAD)), MAX_SPREAD)
-    min_volume = max(float(getattr(config, "min_volume", MIN_VOLUME)), MIN_VOLUME)
+    min_ev = float(getattr(config, "min_ev", MIN_EV))
+    max_spread = float(getattr(config, "max_slippage", MAX_SPREAD))
+    min_volume = float(getattr(config, "min_volume", MIN_VOLUME))
     
     # 1. Anti-Crossed Book Guard (Crucial for realistic Paper Trading)
     bid = float(outcome.get("bid", 0.0))

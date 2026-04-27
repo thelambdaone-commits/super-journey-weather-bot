@@ -2,8 +2,7 @@
 
 WeatherBot is a modular research and paper-trading bot for weather prediction markets. It scans weather markets, estimates bucket probabilities, ranks opportunities, sends Telegram alerts, records decisions/resolutions, and maintains an audit trail for model validation.
 
-Current posture as of 2026-04-26: **paper + signal mode is operational**. v2.5.2 "Perfection" audit completed with AI unit awareness and GFS/HRRR source optimization.
-
+Current posture as of 2026-04-27: **paper + signal mode is operational**. v2.5.3 "Optimization" update completed with enhanced scan frequency (15m), relaxed liquidity filters, and precision rounding fixes.
 ---
 
 ## Architecture
