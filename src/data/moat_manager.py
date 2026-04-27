@@ -2,6 +2,7 @@
 Moat Manager V3.2 - Robust Data Layer.
 Includes typed errors, parameterized queries, and strict audit trails.
 """
+
 import duckdb
 import polars as pl
 from pathlib import Path
@@ -10,26 +11,36 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class MoatError(Exception):
     """Base exception for Moat operations."""
+
     pass
+
 
 class MoatConnectionError(MoatError):
     """Failed to connect to the DuckDB instance."""
+
     pass
+
 
 class MoatWriteError(MoatError):
     """Failed to write data to the Moat."""
+
     pass
+
 
 class MoatQueryError(MoatError):
     """Failed to query data from the Moat."""
+
     pass
+
 
 class MoatManager:
     """
     Manages the local DuckDB instance with robust error handling and TIMESTAMPTZ.
     """
+
     def __init__(self, db_path: str = "data/weather_moat.db", read_only: bool = False):
         self.db_path = db_path
         self.read_only = read_only
@@ -105,7 +116,7 @@ class MoatManager:
             raise MoatWriteError("Cannot save forecasts from a read-only MoatManager")
         if df.is_empty():
             return
-            
+
         try:
             # Note: Parameterized query for large data is handled via DuckDB's native polars integration
             conn = self._connect()
@@ -118,7 +129,17 @@ class MoatManager:
             logger.exception("Failed to bulk insert forecasts")
             raise MoatWriteError("Forecast insertion failed")
 
-    def save_quote(self, market_id: str, city: str, bid: float, ask: float, vwap: float, spread: float, liquidity: float, tick_size: float):
+    def save_quote(
+        self,
+        market_id: str,
+        city: str,
+        bid: float,
+        ask: float,
+        vwap: float,
+        spread: float,
+        liquidity: float,
+        tick_size: float,
+    ):
         if not self.ready:
             raise MoatConnectionError("Database not ready")
         if self.read_only:
@@ -129,9 +150,12 @@ class MoatManager:
             # PARAMETERIZED QUERY
             conn = self._connect()
             try:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO market_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (ts, market_id, city, bid, ask, vwap, mid, spread, liquidity, tick_size, 0.0))
+                """,
+                    (ts, market_id, city, bid, ask, vwap, mid, spread, liquidity, tick_size, 0.0),
+                )
             finally:
                 conn.close()
         except (Exception,) as e:
@@ -166,12 +190,15 @@ class MoatManager:
         try:
             conn = self._connect()
             try:
-                res = conn.execute("""
+                res = conn.execute(
+                    """
                     SELECT AVG(ABS(error_c))
                     FROM calibration_events
                     WHERE city = ? AND model = ?
                     ORDER BY event_ts DESC LIMIT ?
-                """, (city, model, limit)).fetchone()
+                """,
+                    (city, model, limit),
+                ).fetchone()
             finally:
                 conn.close()
             return res[0] if res and res[0] is not None else 2.0
@@ -183,7 +210,9 @@ class MoatManager:
         """Close the DuckDB connection held by this manager."""
         self.ready = False
 
+
 _moat_instances = {}
+
 
 def get_moat(db_path: str = "data/weather_moat.db", read_only: bool = False) -> MoatManager:
     """Return a process-local MoatManager for the requested access mode."""

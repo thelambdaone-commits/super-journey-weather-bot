@@ -216,6 +216,15 @@ Run the full suite:
 ./venv/bin/python -m pytest -q
 ```
 
+Run the same quality gates used by CI:
+
+```bash
+./venv/bin/ruff check .
+./venv/bin/ruff format --check pyproject.toml tests src/data/moat_manager.py src/trading/polymarket.py src/trading/engine.py
+./venv/bin/python -m pytest
+./venv/bin/python -m pip check
+```
+
 Run paper-specific tests:
 
 ```bash
@@ -225,8 +234,11 @@ Run paper-specific tests:
 Current local validation on 2026-04-27:
 
 - `tests/test_paper_logic.py`: 8 passed
-- full suite: 9 passed
+- full suite: 15 passed
+- coverage gate: 89% on the current paper-account baseline, with `--cov-fail-under=80`
 - `git diff --check`: clean
+
+GitHub Actions runs the same lint, format, dependency, and coverage checks on every push and pull request to `main`. Workflow permissions are restricted to `contents: read`. Dependabot is enabled weekly for both pip dependencies and GitHub Actions.
 
 ---
 

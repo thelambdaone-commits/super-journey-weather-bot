@@ -8,6 +8,7 @@ from src.storage import Market
 from src.trading.paper_account import PaperAccount
 from src.trading.resolver import MarketResolver
 
+
 class TestPaperLogic(unittest.TestCase):
     def setUp(self):
         self.data_dir = "data_test_paper"
@@ -102,8 +103,10 @@ class TestPaperLogic(unittest.TestCase):
 
         resolver = MarketResolver(Engine(self.paper))
 
-        with patch("src.trading.resolver.check_market_resolved", return_value=True), \
-             patch("src.trading.resolver.get_actual_temp", return_value=20.0):
+        with (
+            patch("src.trading.resolver.check_market_resolved", return_value=True),
+            patch("src.trading.resolver.get_actual_temp", return_value=20.0),
+        ):
             new_balance, won, pnl = resolver.resolve_market(market, balance=500.0)
 
         self.assertEqual(new_balance, 500.0)
@@ -144,8 +147,10 @@ class TestPaperLogic(unittest.TestCase):
         class Engine:
             paper_account: PaperAccount
 
-        with patch("src.trading.resolver.check_market_resolved", return_value=False) as resolved, \
-             patch("src.trading.resolver.get_actual_temp", return_value=21.0):
+        with (
+            patch("src.trading.resolver.check_market_resolved", return_value=False) as resolved,
+            patch("src.trading.resolver.get_actual_temp", return_value=21.0),
+        ):
             MarketResolver(Engine(self.paper)).resolve_market(market, balance=500.0)
 
         resolved.assert_called_once_with("open-paper")
@@ -153,6 +158,7 @@ class TestPaperLogic(unittest.TestCase):
         self.assertEqual(market.paper_position["status"], "closed")
         self.assertEqual(market.paper_position["pnl"], -20.2)
         self.assertEqual(self.paper.get_state().losses, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

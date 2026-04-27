@@ -1,6 +1,7 @@
 """
 Polymarket API client.
 """
+
 import json
 import re
 import time
@@ -23,10 +24,7 @@ def get_polymarket_event(city_slug: str, month: str, day: int, year: int) -> Opt
     """Get Polymarket event for city/date."""
     slug = f"highest-temperature-in-{city_slug}-on-{month}-{day}-{year}"
     try:
-        r = requests.get(
-            f"https://gamma-api.polymarket.com/events?slug={slug}",
-            timeout=(5, 8)
-        )
+        r = requests.get(f"https://gamma-api.polymarket.com/events?slug={slug}", timeout=(5, 8))
         data = r.json()
         if data and isinstance(data, list) and len(data) > 0:
             return data[0]
@@ -38,10 +36,7 @@ def get_polymarket_event(city_slug: str, month: str, day: int, year: int) -> Opt
 def get_market(market_id: str) -> Optional[Dict]:
     """Get market data."""
     try:
-        r = requests.get(
-            f"https://gamma-api.polymarket.com/markets/{market_id}",
-            timeout=(3, 5)
-        )
+        r = requests.get(f"https://gamma-api.polymarket.com/markets/{market_id}", timeout=(3, 5))
         return r.json()
     except (Exception,) as e:
         logger.error(f"Error fetching Polymarket market {market_id}: {e}")
@@ -79,10 +74,7 @@ def prune_stale_tokens(now: float | None = None) -> int:
     now = now or time.time()
     tokens = _load_stale_tokens()
     before = len(tokens)
-    tokens = {
-        token: ts for token, ts in tokens.items()
-        if now - ts < STALE_TOKEN_TTL_SECONDS
-    }
+    tokens = {token: ts for token, ts in tokens.items() if now - ts < STALE_TOKEN_TTL_SECONDS}
     removed = before - len(tokens)
     if removed or tokens != _load_stale_tokens():
         _stale_tokens = tokens
@@ -144,7 +136,9 @@ def get_orderbook(token_id: str, max_attempts: int = 3, backoff_s: float = 0.25)
                     continue
                 logger.warning(
                     "CLOB book unavailable for token %s after %d attempts: HTTP %s",
-                    token_id, attempts, response.status_code,
+                    token_id,
+                    attempts,
+                    response.status_code,
                 )
                 return None
             if not response.ok:
@@ -176,11 +170,11 @@ def get_vwap_for_size(orderbook: dict, target_usd: float, side: str = "ask") -> 
     levels = orderbook.get("asks" if side == "ask" else "bids", [])
     if not levels:
         return 0.5
-        
+
     accum_cost = 0.0
     accum_shares = 0.0
     remaining_usd = target_usd
-    
+
     for level in levels:
         if isinstance(level, dict):
             price = float(level.get("price", 0.0))
@@ -192,7 +186,7 @@ def get_vwap_for_size(orderbook: dict, target_usd: float, side: str = "ask") -> 
         if price <= 0 or size_shares <= 0:
             continue
         level_usd = price * size_shares
-        
+
         if remaining_usd <= level_usd:
             # We fill the remainder in this level
             fill_shares = remaining_usd / price
@@ -205,21 +199,22 @@ def get_vwap_for_size(orderbook: dict, target_usd: float, side: str = "ask") -> 
             accum_shares += size_shares
             accum_cost += level_usd
             remaining_usd -= level_usd
-            
+
     if accum_shares == 0:
         first = levels[0] if levels else None
         if isinstance(first, dict):
             return float(first.get("price", 0.5))
         return float(first[0]) if first else 0.5
-        
+
     # Return average price per share
     vwap = accum_cost / accum_shares
-    
+
     # If we couldn't fill the whole size, we add a penalty
     if remaining_usd > 0:
-        vwap *= 1.1 
-        
+        vwap *= 1.1
+
     return round(vwap, 4)
+
 
 def refresh_outcome_orderbook(outcome: Dict) -> bool:
     """
@@ -252,21 +247,27 @@ def refresh_outcome_orderbook(outcome: Dict) -> bool:
         return False
 
     midpoint = (best_bid + best_ask) / 2
-    bid_size = next((_as_float(level.get("size"), 0.0) for level in bids if _as_float(level.get("price")) == best_bid), 0.0)
-    ask_size = next((_as_float(level.get("size"), 0.0) for level in asks if _as_float(level.get("price")) == best_ask), 0.0)
+    bid_size = next(
+        (_as_float(level.get("size"), 0.0) for level in bids if _as_float(level.get("price")) == best_bid), 0.0
+    )
+    ask_size = next(
+        (_as_float(level.get("size"), 0.0) for level in asks if _as_float(level.get("price")) == best_ask), 0.0
+    )
 
-    outcome.update({
-        "bid": round(best_bid, 4),
-        "ask": round(best_ask, 4),
-        "price": round(midpoint, 4),
-        "spread": round(best_ask - best_bid, 4),
-        "best_bid_size": round(float(bid_size or 0.0), 4),
-        "best_ask_size": round(float(ask_size or 0.0), 4),
-        "last_trade_price": _as_float(book.get("last_trade_price")),
-        "tick_size": _as_float(book.get("tick_size")),
-        "min_order_size": _as_float(book.get("min_order_size")),
-        "orderbook_status": "ok",
-    })
+    outcome.update(
+        {
+            "bid": round(best_bid, 4),
+            "ask": round(best_ask, 4),
+            "price": round(midpoint, 4),
+            "spread": round(best_ask - best_bid, 4),
+            "best_bid_size": round(float(bid_size or 0.0), 4),
+            "best_ask_size": round(float(ask_size or 0.0), 4),
+            "last_trade_price": _as_float(book.get("last_trade_price")),
+            "tick_size": _as_float(book.get("tick_size")),
+            "min_order_size": _as_float(book.get("min_order_size")),
+            "orderbook_status": "ok",
+        }
+    )
     return True
 
 
@@ -275,11 +276,11 @@ def check_market_resolved(market_id: str) -> Optional[bool]:
     data = get_market(market_id)
     if not data:
         return None
-    
+
     closed = data.get("closed", False)
     if not closed:
         return None
-    
+
     try:
         prices = json.loads(data.get("outcomePrices", "[0.5,0.5]"))
         if not isinstance(prices, list) or len(prices) < 1:
@@ -300,36 +301,36 @@ def parse_temp_range(question: str) -> Optional[Tuple[float, float]]:
     """Parse temperature range from question."""
     if not question:
         return None
-    
-    num = r'(-?\d+(?:\.\d+)?)'
-    
+
+    num = r"(-?\d+(?:\.\d+)?)"
+
     # "X or below"
     if "or below" in question.lower():
-        m = re.search(num + r'[°]?[FC] or below', question, re.IGNORECASE)
+        m = re.search(num + r"[°]?[FC] or below", question, re.IGNORECASE)
         if m:
             low = float(m.group(1))
             return (-999.0, low)
-    
+
     # "X or higher"
     if "or higher" in question.lower():
-        m = re.search(num + r'[°]?[FC] or higher', question, re.IGNORECASE)
+        m = re.search(num + r"[°]?[FC] or higher", question, re.IGNORECASE)
         if m:
             high = float(m.group(1))
             return (high, 999.0)
-    
+
     # "between X-Y"
-    m = re.search(r'between ' + num + r'-' + num + r'[°]?[FC]', question, re.IGNORECASE)
+    m = re.search(r"between " + num + r"-" + num + r"[°]?[FC]", question, re.IGNORECASE)
     if m:
         low = float(m.group(1))
         high = float(m.group(2))
         return (low, high)
 
     # "be X on"
-    m = re.search(r'be ' + num + r'[°]?[FC] on', question, re.IGNORECASE)
+    m = re.search(r"be " + num + r"[°]?[FC] on", question, re.IGNORECASE)
     if m:
         v = float(m.group(1))
         return (v, v)
-    
+
     return None
 
 
@@ -345,16 +346,16 @@ def hours_to_resolution(end_date_str: str) -> float:
 def get_outcomes(event: Dict) -> List[Dict]:
     """Extract outcomes from event."""
     outcomes = []
-    
+
     for market in event.get("markets", []):
         question = market.get("question", "")
         mid = str(market.get("id", ""))
         volume = float(market.get("volume", 0))
         rng = parse_temp_range(question)
-        
+
         if not rng:
             continue
-        
+
         try:
             prices_str = market.get("outcomePrices", "[0.5,0.5]")
             prices = json.loads(prices_str)
@@ -373,22 +374,25 @@ def get_outcomes(event: Dict) -> List[Dict]:
         except (json.JSONDecodeError, ValueError, IndexError) as e:
             logger.error(f"Skipping market {mid} due to price error: {e}")
             continue
-        
-        outcomes.append({
-            "question": question,
-            "market_id": mid,
-            "token_id": yes_token_id,
-            "range": rng,
-            "yes_price": round(yes_price, 4),
-            "no_price": round(no_price, 4),
-            "ask": round(ask, 4),
-            "bid": round(bid, 4),
-            "price": round(yes_price, 4),
-            "spread": round(spread, 4),
-            "volume": round(volume, 0),
-        })
-    
+
+        outcomes.append(
+            {
+                "question": question,
+                "market_id": mid,
+                "token_id": yes_token_id,
+                "range": rng,
+                "yes_price": round(yes_price, 4),
+                "no_price": round(no_price, 4),
+                "ask": round(ask, 4),
+                "bid": round(bid, 4),
+                "price": round(yes_price, 4),
+                "spread": round(spread, 4),
+                "volume": round(volume, 0),
+            }
+        )
+
     outcomes.sort(key=lambda x: x["range"][0])
     return outcomes
+
 
 # Audit: Includes fee and slippage awareness

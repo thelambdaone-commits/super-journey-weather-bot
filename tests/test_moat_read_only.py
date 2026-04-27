@@ -9,17 +9,23 @@ from src.data.moat_manager import MoatManager, MoatWriteError
 def test_moat_read_only_allows_queries_and_rejects_writes(tmp_path):
     db_path = tmp_path / "moat.db"
     writer = MoatManager(str(db_path))
-    writer.save_forecasts(pl.DataFrame([{
-        "ingested_at": datetime.now(timezone.utc),
-        "city": "PARIS",
-        "model": "ecmwf",
-        "run_cycle": datetime(2026, 4, 27, tzinfo=timezone.utc),
-        "valid_time": datetime(2026, 4, 28, tzinfo=timezone.utc),
-        "horizon_hours": 24,
-        "temp_c": 22.0,
-        "humidity": 0.0,
-        "pressure": 0.0,
-    }]))
+    writer.save_forecasts(
+        pl.DataFrame(
+            [
+                {
+                    "ingested_at": datetime.now(timezone.utc),
+                    "city": "PARIS",
+                    "model": "ecmwf",
+                    "run_cycle": datetime(2026, 4, 27, tzinfo=timezone.utc),
+                    "valid_time": datetime(2026, 4, 28, tzinfo=timezone.utc),
+                    "horizon_hours": 24,
+                    "temp_c": 22.0,
+                    "humidity": 0.0,
+                    "pressure": 0.0,
+                }
+            ]
+        )
+    )
     writer.close()
 
     reader = MoatManager(str(db_path), read_only=True)
