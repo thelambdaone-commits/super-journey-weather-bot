@@ -30,23 +30,30 @@ class MoatManager:
     """
     Manages the local DuckDB instance with robust error handling and TIMESTAMPTZ.
     """
-    def __init__(self, db_path: str = "data/weather_moat.db"):
+    def __init__(self, db_path: str = "data/weather_moat.db", read_only: bool = False):
         self.db_path = db_path
+        self.read_only = read_only
         Path("data").mkdir(exist_ok=True)
         try:
-            self.conn = duckdb.connect(self.db_path)
-            self._bootstrap()
+            conn = duckdb.connect(self.db_path, read_only=read_only)
+            if not read_only:
+                self._bootstrap(conn)
+            conn.close()
             self.ready = True
         except (Exception,) as e:
-            logger.exception("CRITICAL: Failed to connect to DuckDB at %s", self.db_path)
+            mode = "read_only" if read_only else "read_write"
+            logger.exception("CRITICAL: Failed to connect to DuckDB at %s (%s)", self.db_path, mode)
             self.ready = False
-            raise MoatConnectionError(f"Could not open database at {db_path}")
+            raise MoatConnectionError(f"Could not open database at {db_path} ({mode})")
 
-    def _bootstrap(self):
+    def _connect(self):
+        return duckdb.connect(self.db_path, read_only=self.read_only)
+
+    def _bootstrap(self, conn):
         """Initialize the TIMESTAMPTZ billionaire schema."""
         try:
             # Forecast Runs Table
-            self.conn.execute("""
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS forecast_runs (
                     ingested_at TIMESTAMPTZ,      
                     city TEXT,
@@ -60,7 +67,7 @@ class MoatManager:
                 )
             """)
             # Market Quotes Table
-            self.conn.execute("""
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS market_history (
                     quote_ts TIMESTAMPTZ,        
                     market_id TEXT,
@@ -76,7 +83,7 @@ class MoatManager:
                 )
             """)
             # Calibration Events
-            self.conn.execute("""
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS calibration_events (
                     event_ts TIMESTAMPTZ,
                     city TEXT,
@@ -94,12 +101,18 @@ class MoatManager:
     def save_forecasts(self, df: pl.DataFrame):
         if not self.ready:
             raise MoatConnectionError("Database not ready")
+        if self.read_only:
+            raise MoatWriteError("Cannot save forecasts from a read-only MoatManager")
         if df.is_empty():
             return
             
         try:
             # Note: Parameterized query for large data is handled via DuckDB's native polars integration
-            self.conn.execute("INSERT INTO forecast_runs SELECT * FROM df")
+            conn = self._connect()
+            try:
+                conn.execute("INSERT INTO forecast_runs SELECT * FROM df")
+            finally:
+                conn.close()
             logger.info("[MOAT] Saved %d forecast points.", len(df))
         except (Exception,) as e:
             logger.exception("Failed to bulk insert forecasts")
@@ -108,13 +121,19 @@ class MoatManager:
     def save_quote(self, market_id: str, city: str, bid: float, ask: float, vwap: float, spread: float, liquidity: float, tick_size: float):
         if not self.ready:
             raise MoatConnectionError("Database not ready")
+        if self.read_only:
+            raise MoatWriteError("Cannot save quotes from a read-only MoatManager")
         try:
             ts = datetime.now(timezone.utc)
             mid = (bid + ask) / 2 if bid and ask else 0.5
             # PARAMETERIZED QUERY
-            self.conn.execute("""
-                INSERT INTO market_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (ts, market_id, city, bid, ask, vwap, mid, spread, liquidity, tick_size, 0.0))
+            conn = self._connect()
+            try:
+                conn.execute("""
+                    INSERT INTO market_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (ts, market_id, city, bid, ask, vwap, mid, spread, liquidity, tick_size, 0.0))
+            finally:
+                conn.close()
         except (Exception,) as e:
             logger.exception("Failed to save market quote for %s", city)
             raise MoatWriteError(f"Market quote persistence failed for {city}")
@@ -132,7 +151,11 @@ class MoatManager:
                 AND run_cycle < now()
                 ORDER BY run_cycle DESC
             """
-            return self.conn.execute(query, (city, target_time)).pl()
+            conn = self._connect()
+            try:
+                return conn.execute(query, (city, target_time)).pl()
+            finally:
+                conn.close()
         except (Exception,) as e:
             logger.exception("Failed to query valid forecasts for %s", city)
             raise MoatQueryError(f"Anti-leakage query failed for {city}")
@@ -141,21 +164,30 @@ class MoatManager:
         if not self.ready:
             return 2.0
         try:
-            res = self.conn.execute("""
-                SELECT AVG(ABS(error_c)) 
-                FROM calibration_events 
-                WHERE city = ? AND model = ?
-                ORDER BY event_ts DESC LIMIT ?
-            """, (city, model, limit)).fetchone()
+            conn = self._connect()
+            try:
+                res = conn.execute("""
+                    SELECT AVG(ABS(error_c))
+                    FROM calibration_events
+                    WHERE city = ? AND model = ?
+                    ORDER BY event_ts DESC LIMIT ?
+                """, (city, model, limit)).fetchone()
+            finally:
+                conn.close()
             return res[0] if res and res[0] is not None else 2.0
         except (Exception,) as e:
             logger.exception("Failed to fetch calibration error for %s", city)
             return 2.0
 
-_moat_instance = None
+    def close(self) -> None:
+        """Close the DuckDB connection held by this manager."""
+        self.ready = False
 
-def get_moat(db_path: str = "data/weather_moat.db") -> MoatManager:
-    global _moat_instance
-    if _moat_instance is None:
-        _moat_instance = MoatManager(db_path)
-    return _moat_instance
+_moat_instances = {}
+
+def get_moat(db_path: str = "data/weather_moat.db", read_only: bool = False) -> MoatManager:
+    """Return a process-local MoatManager for the requested access mode."""
+    key = (str(db_path), bool(read_only))
+    if key not in _moat_instances:
+        _moat_instances[key] = MoatManager(db_path, read_only=read_only)
+    return _moat_instances[key]

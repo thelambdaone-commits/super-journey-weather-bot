@@ -255,11 +255,20 @@ data/state.json                 # live/state accounting
 data/paper_account.json         # paper account stats
 data/markets/*.json             # per-market snapshots and positions
 data/weather_moat.db            # DuckDB forecast/quote moat
+data/stale_clob_tokens.json     # CLOB token IDs suppressed after repeated 404s
 data/ouroboros_state.json       # auto-improvement state
 logs/signal_bot.log             # long-running bot log
 logs/paper_trades.json          # paper trade journal
 logs/bot_runtime.log            # runtime/service log
 ```
+
+### Polymarket CLOB Resilience
+
+The CLOB orderbook client retries transient failures with exponential backoff. Permanent CLOB `404` responses mark the token ID as stale for 24 hours in `data/stale_clob_tokens.json`, which prevents repeated noisy requests against expired or invalid token IDs. Expired stale-token entries are pruned automatically.
+
+### DuckDB Access
+
+DuckDB allows either one read-write process or multiple read-only processes. `MoatManager` now supports explicit `read_only=True` connections and does not keep a read-write connection open between operations. This keeps write locks short-lived and reduces conflicts with diagnostics or read-only tooling.
 
 Do not commit `.env`, runtime logs, or private credentials.
 

@@ -6,12 +6,17 @@ import re
 import time
 import requests
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 CLOB_HOST = "https://clob.polymarket.com"
+STALE_TOKEN_TTL_SECONDS = 24 * 60 * 60
+STALE_TOKEN_FILE = Path("data/stale_clob_tokens.json")
+TRANSIENT_CLOB_STATUS = {408, 425, 429, 500, 502, 503, 504}
+_stale_tokens: dict[str, float] | None = None
 
 
 def get_polymarket_event(city_slug: str, month: str, day: int, year: int) -> Optional[Dict]:
@@ -51,26 +56,116 @@ def _as_float(value, default: float | None = None) -> float | None:
         return default
 
 
-def get_orderbook(token_id: str) -> Optional[Dict]:
+def _load_stale_tokens() -> dict[str, float]:
+    global _stale_tokens
+    if _stale_tokens is not None:
+        return _stale_tokens
+    try:
+        data = json.loads(STALE_TOKEN_FILE.read_text(encoding="utf-8"))
+        _stale_tokens = {str(token): float(ts) for token, ts in data.items()}
+    except (Exception,):
+        _stale_tokens = {}
+    return _stale_tokens
+
+
+def _save_stale_tokens(tokens: dict[str, float]) -> None:
+    STALE_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STALE_TOKEN_FILE.write_text(json.dumps(tokens, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def prune_stale_tokens(now: float | None = None) -> int:
+    """Remove stale-token suppressions older than the TTL."""
+    global _stale_tokens
+    now = now or time.time()
+    tokens = _load_stale_tokens()
+    before = len(tokens)
+    tokens = {
+        token: ts for token, ts in tokens.items()
+        if now - ts < STALE_TOKEN_TTL_SECONDS
+    }
+    removed = before - len(tokens)
+    if removed or tokens != _load_stale_tokens():
+        _stale_tokens = tokens
+        _save_stale_tokens(tokens)
+    return removed
+
+
+def is_stale_token(token_id: str, now: float | None = None) -> bool:
+    """Return True when a CLOB token was recently proven invalid."""
+    if not token_id:
+        return False
+    now = now or time.time()
+    tokens = _load_stale_tokens()
+    ts = tokens.get(str(token_id))
+    if ts is None:
+        return False
+    if now - ts >= STALE_TOKEN_TTL_SECONDS:
+        prune_stale_tokens(now)
+        return False
+    return True
+
+
+def mark_stale_token(token_id: str, now: float | None = None) -> None:
+    """Suppress repeated CLOB requests for token IDs returning permanent 404s."""
+    if not token_id:
+        return
+    tokens = _load_stale_tokens()
+    token = str(token_id)
+    first_seen = token not in tokens
+    tokens[token] = now or time.time()
+    _save_stale_tokens(tokens)
+    if first_seen:
+        logger.warning("CLOB token %s marked stale for 24h after HTTP 404", token)
+
+
+def get_orderbook(token_id: str, max_attempts: int = 3, backoff_s: float = 0.25) -> Optional[Dict]:
     """Fetch the CLOB orderbook for one outcome token."""
+    token_id = str(token_id or "")
     if not token_id:
         return None
-    try:
-        response = requests.get(
-            f"{CLOB_HOST}/book",
-            params={"token_id": str(token_id)},
-            timeout=(3, 5),
-        )
-        if not response.ok:
-            logger.warning("CLOB book unavailable for token %s: HTTP %s", token_id, response.status_code)
-            return None
-        data = response.json()
-        if not isinstance(data, dict):
-            return None
-        return data
-    except (Exception,) as exc:
-        logger.warning("Error fetching CLOB book for token %s: %s", token_id, exc)
+    prune_stale_tokens()
+    if is_stale_token(token_id):
         return None
+
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.get(
+                f"{CLOB_HOST}/book",
+                params={"token_id": token_id},
+                timeout=(3, 5),
+            )
+            if response.status_code == 404:
+                mark_stale_token(token_id)
+                return None
+            if response.status_code in TRANSIENT_CLOB_STATUS:
+                if attempt < attempts:
+                    time.sleep(backoff_s * (2 ** (attempt - 1)))
+                    continue
+                logger.warning(
+                    "CLOB book unavailable for token %s after %d attempts: HTTP %s",
+                    token_id, attempts, response.status_code,
+                )
+                return None
+            if not response.ok:
+                logger.warning("CLOB book unavailable for token %s: HTTP %s", token_id, response.status_code)
+                return None
+            data = response.json()
+            if not isinstance(data, dict):
+                logger.warning("CLOB book response for token %s was not a JSON object", token_id)
+                return None
+            return data
+        except requests.RequestException as exc:
+            if attempt < attempts:
+                time.sleep(backoff_s * (2 ** (attempt - 1)))
+                continue
+            logger.warning("CLOB book request failed for token %s after %d attempts: %s", token_id, attempts, exc)
+            return None
+        except (ValueError, TypeError) as exc:
+            logger.warning("CLOB book parse failed for token %s: %s", token_id, exc)
+            return None
+
+    return None
 
 
 def get_vwap_for_size(orderbook: dict, target_usd: float, side: str = "ask") -> float:
