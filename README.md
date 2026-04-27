@@ -2,21 +2,22 @@
 
 WeatherBot is a modular research and paper-trading bot for weather prediction markets. It scans weather markets, estimates bucket probabilities, ranks opportunities, sends Telegram alerts, records decisions/resolutions, and maintains an audit trail for model validation.
 
-Current posture as of 2026-04-27: **paper + signal mode is operational**. v2.5.3 "Optimization" update completed with enhanced scan frequency (15m), relaxed liquidity filters, and precision rounding fixes.
+Current posture as of 2026-04-27: **V3.1 "Elite Alpha" Operational**. The system has transitioned from a simple trading bot to a full-scale **Weather Intelligence Infrastructure** with fund-grade quant features.
+
 ---
 
-## Architecture
+## Architecture (V3.1 Elite Alpha)
 
-The system follows a modular, decoupled architecture focused on reproducibility and auditability.
+The system follows a modular, service-oriented architecture (SOA) designed for extreme precision, auditability, and scalability.
 
-- **`src/weather`**: forecast and actual-temperature ingestion (ECMWF, GFS, HRRR, DWD, NWS, METAR).
-- **`src/trading`**: runtime engine, scanner, resolver, paper account, and Polymarket CLOB execution adapter.
-- **`src/strategy`**: EV, Kelly sizing, ranking, quality filters, and portfolio risk limits.
-- **`src/probability`**: bucket probability, uncertainty, and calibration.
-- **`src/ml`**: lightweight forecast-bias model with conservative sample-size shrinkage.
-- **`src/data`**: append-only decision/resolution rows, QA, backtests, and reproducibility helpers.
-- **`src/ai`**: Groq diagnostics and anomaly review (unit-aware °C/°F).
-- **`src/ai/ourobouros`**: guarded auto-improvement loop for retrain/calibration attempts.
+- **`src/alpha`**: **[V3]** Fair Value Engine. Calculates theoretical probabilities from multi-model ensembles with Calibration Gates.
+- **`src/data`**: **[V3]** Moat Manager. High-performance DuckDB analytics engine for long-term alpha storage using TIMESTAMPTZ.
+- **`src/settlement`**: **[V3]** Surgical station mapping (METAR/NOAA) for 100% accurate market resolution.
+- **`src/weather/collectors`**: **[V3]** Regional Multi-Model Collectors (ECMWF, GFS, ICON, JMA, HRRR).
+- **`src/trading`**: Runtime engine, scanner, and Polymarket CLOB adapter with **VWAP-aware execution** and **Tick-Size Guards**.
+- **`src/strategy`**: EV, Kelly sizing, ranking, quality filters, and SignalQualityLayer (V3).
+- **`src/ml`**: Anomaly detection (Autoencoder), Bayesian uncertainty, and Shrunk Logistic Regression.
+- **`src/backtest`**: Ranking backtests and **Baseline Benchmark Reports** (V3).
 
 ---
 
@@ -276,42 +277,14 @@ weatherbot/
 ├── .env                   # API keys (private)
 ├── README.md               # This file
 ├── src/
-│   ├── ai/
-│   │   ├── __init__.py           # Groq AI module
-│   │   ├── diagnostics.py         # AI diagnostics
-│   │   └── ouroboros/           # Auto-improvement loop
-│   ├── data/
-│   │   ├── loader.py
-│   │   ├── storage.py
-│   │   ├── feedback.py
-│   │   ├── learning.py
-│   │   └── ...
-│   ├── strategy/
-│   │   ├── scoring.py
-│   │   ├── sizing.py
-│   │   ├── edge.py
-│   │   ├── risk_manager.py
-│   │   ├── optimize.py
-│   │   └── gem.py
-│   ├── ml/
-│   │   ├── xgboost_train.py
-│   │   ├── hyperopt.py
-│   │   ├── calibration_audit.py
-│   │   └── registry.py
-│   ├── trading/
-│   │   ├── engine.py
-│   │   ├── scanner.py
-│   │   ├── resolver.py
-│   │   ├── execution.py
-│   │   └── health.py
-│   ├── weather/
-│   │   ├── config.py
-│   │   ├── apis.py
-│   │   └── locations.py
-│   └── probability/
-│       ├── calibration.py
-│       ├── bootstrap.py
-│       └── uncertainty.py
+│   ├── alpha/               # [V3] Fair Value Engine
+│   ├── data/                # [V3] Moat Manager (DuckDB)
+│   ├── settlement/          # [V3] Station Maps
+│   ├── strategy/            # Risk, Sizing, Scoring
+│   ├── ml/                  # Bayesian, Anomaly, Metrics
+│   ├── trading/             # VWAP, Tick-Size, CLOB
+│   ├── weather/             # Multi-model collectors
+│   └── backtest/            # Baseline benchmarks
 ├── data/
 │   ├── dataset_rows.jsonl
 │   ├── ml_model.json
