@@ -1,0 +1,11 @@
+[Unit]
+Description=WeatherBot Watchdog Timer
+After=weatherbot.service
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=weatherbot-watchdog.service
+
+[Install]
+WantedBy=timers.target

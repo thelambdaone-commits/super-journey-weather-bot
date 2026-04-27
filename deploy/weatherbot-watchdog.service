@@ -1,0 +1,9 @@
+[Unit]
+Description=WeatherBot Watchdog Service
+After=network.target
+
+[Service]
+Type=oneshot
+User=74h2hfpyj79x
+WorkingDirectory=/home/74h2hfpyj79x/weatherbot
+ExecStart=/home/74h2hfpyj79x/weatherbot/watchdog.sh
