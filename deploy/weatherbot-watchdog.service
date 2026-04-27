@@ -6,4 +6,4 @@ After=network.target
 Type=oneshot
 User=74h2hfpyj79x
 WorkingDirectory=/home/74h2hfpyj79x/weatherbot
-ExecStart=/home/74h2hfpyj79x/weatherbot/watchdog.sh
+ExecStart=/home/74h2hfpyj79x/weatherbot/scripts/watchdog.sh
