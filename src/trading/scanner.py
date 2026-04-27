@@ -72,8 +72,11 @@ class MarketScanner:
                 dates = [(now + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(4)]
                 snapshots = get_forecasts(city_slug, dates)
                 time.sleep(0.3)
-            except Exception as exc:
-                self.engine.emit(f"skipped ({exc})")
+            except (ValueError, KeyError) as e:
+                logger.error(f"Data mapping error for {city_slug}: {e}")
+                continue
+            except Exception:
+                logger.exception(f"Unexpected crash while scanning {city_slug}")
                 continue
 
             for i, date_str in enumerate(dates):
@@ -409,10 +412,10 @@ class MarketScanner:
                 "mae": estimate.mae,
                 "n": estimate.n,
                 "tier": estimate.tier,
-                "bayesian_uncertainty": signal_dict.get("bayesian_uncertainty"),
-                "anomaly_error": signal_dict.get("anomaly_error"),
-                "sentiment_boost": signal_dict.get("sentiment_boost"),
-                "portfolio_notes": signal_dict.get("portfolio_notes"),
+                "mae": estimate.mae,
+                "n": estimate.n,
+                "tier": estimate.tier,
+                "features": features, # Reference features directly
             },
             "features": features,
             "opened_at": datetime.now(timezone.utc).isoformat(),
