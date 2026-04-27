@@ -1,0 +1,16 @@
+[Unit]
+Description=Weather Trading Bot (super-journey-weather-bot)
+After=network.target
+
+[Service]
+User=74h2hfpyj79x
+WorkingDirectory=/home/74h2hfpyj79x/weatherbot
+ExecStart=/home/74h2hfpyj79x/weatherbot/venv/bin/python -u bot.py run --paper-on --signal-on --live-off
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/74h2hfpyj79x/weatherbot/logs/stdout.log
+StandardError=append:/home/74h2hfpyj79x/weatherbot/logs/stderr.log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
