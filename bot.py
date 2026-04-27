@@ -636,5 +636,5 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         sys.exit(0)
     except (Exception) as e:
-        crash_alert(e)
+        crash_alert("bot.py", repr(e))
         raise

@@ -1,365 +1,326 @@
-# WeatherBot - Weather Prediction Market Research Bot
+# WeatherBot
 
-WeatherBot is a modular research and paper-trading bot for weather prediction markets. It scans weather markets, estimates bucket probabilities, ranks opportunities, sends Telegram alerts, records decisions/resolutions, and maintains an audit trail for model validation.
+WeatherBot is a Python research and paper-trading system for weather prediction markets. It scans Polymarket weather markets, collects forecasts, estimates fair value, filters risky opportunities, sends Telegram alerts, records paper trades, resolves markets, and keeps enough data for audit and model improvement.
 
-Current posture as of 2026-04-27: **V3.1 "Elite Alpha" Operational**. The system has transitioned from a simple trading bot to a full-scale **Weather Intelligence Infrastructure** with fund-grade quant features.
+Current status on 2026-04-27: paper trading and signal mode are operational. Live trading is disabled by default and guarded by explicit runtime and environment checks.
 
----
-
-## Architecture (V3.1 Elite Alpha)
-
-The system follows a modular, service-oriented architecture (SOA) designed for extreme precision, auditability, and scalability.
-
-- **`src/alpha`**: **[V3]** Fair Value Engine. Calculates theoretical probabilities from multi-model ensembles with Calibration Gates.
-- **`src/data`**: **[V3]** Moat Manager. High-performance DuckDB analytics engine for long-term alpha storage using TIMESTAMPTZ.
-- **`src/settlement`**: **[V3]** Surgical station mapping (METAR/NOAA) for 100% accurate market resolution.
-- **`src/weather/collectors`**: **[V3]** Regional Multi-Model Collectors (ECMWF, GFS, ICON, JMA, HRRR).
-- **`src/trading`**: Runtime engine, scanner, and Polymarket CLOB adapter with **VWAP-aware execution** and **Tick-Size Guards**.
-- **`src/strategy`**: EV, Kelly sizing, ranking, quality filters, and SignalQualityLayer (V3).
-- **`src/ml`**: Anomaly detection (Autoencoder), Bayesian uncertainty, and Shrunk Logistic Regression.
-- **`src/backtest`**: Ranking backtests and **Baseline Benchmark Reports** (V3).
+Repository: `git@github.com:thelambdaone-commits/super-journey-weather-bot.git`
 
 ---
 
-## Risk Management
+## Safety Posture
 
-The system enforces strict safety layers:
+Default operating mode is research/paper only:
 
-- **Portfolio Risk Layer**:
-  - Regional concentration limits (Europe, US, LatAm, Pacific).
-  - Exposure caps per city and global portfolio.
-  - Effective-number-of-bets monitoring via inverse HHI.
-- **Audit Framework**:
-  - anti-leakage checks,
-  - calibration diagnostics,
-  - ranking backtests against naive/random baselines,
-  - reproducible model/data hashing.
-- **Live-trading guardrails**:
-  - `LIVE_TRADE=False` by default,
-  - live requires `LIVE_TRADE_CONFIRM=true`,
-  - live requires `POLYMARKET_PRIVATE_KEY`,
-  - CLOB execution uses real orderbook bid/ask rather than Gamma display prices,
-  - synthetic stop handling cancels the resting take-profit order before market close.
-- **Micro-Live Caps** (NEW):
-  - `MAX_LIVE_BET_USD=10` - hard cap per trade in live mode
-  - `MAX_LIVE_TOTAL_EXPOSURE_USD=50` - hard cap total exposure in live mode
-  - Overrides Kelly calculation if exceeded
-- **Drawdown Alerts** (NEW):
-  - 5% drawdown → Telegram warning alert
-  - 15% drawdown → Kill switch (bot stops automatically)
+- `PAPER_MODE=True`
+- `SIGNAL_MODE=True`
+- `LIVE_TRADE=False`
+- `--live-on` is blocked unless `LIVE_TRADE_CONFIRM=true` is present.
+- Live CLOB execution also requires wallet credentials and executor readiness.
+- Paper accounting is separated from live state.
+- The current safe long-running command is:
 
----
-
-## APIs Used
-
-| API | Credential | Purpose |
-|-----|------------|---------|
-| Open-Meteo | None | ECMWF + HRRR + GFS forecasts |
-| Open-Meteo Archive | None | Historical temps for resolution |
-| Meteostat | None (pip) | Fallback historical temps |
-| Aviation Weather (METAR) | None | Real-time station observations |
-| Polymarket Gamma | None | Market data |
-| Polymarket CLOB | Wallet credentials for live | Executable orderbook and order posting |
-| Groq | Free key | AI analysis |
-
----
-
-## ML & Auto-Improvement
-
-The system uses XGBoost for weather prediction with an auto-improvement loop:
-
-- **XGBoost** - Primary ML model (binary classification)
-- **Hyperparameter Tuning** - Grid/Random search with CV and safety gates
-- **Ouroboros** - Auto-improvement loop with retrain/rollback
-- **Calibration** - Isotonic regression for probability calibration
-
-### Hyperparameter Tuning (NEW)
 ```bash
-# Run tuning with default settings
-python bot.py tune
-
-# With custom parameters
-python bot.py tune --trials 32 --timeout 300 --min-improvement 0.01
+setsid ./venv/bin/python -u bot.py run --paper-on --signal-on --live-off --tui-off > logs/signal_bot.log 2>&1 < /dev/null &
 ```
 
-Features:
-- Grid search + Random search over hyperparameter space
-- 5-fold cross-validation
-- Automatic rejection if no improvement vs baseline
-- Safety gates: rejects on small datasets (<100 train rows)
-- History tracking in `data/tuning_history.jsonl`
+Do not enable live trading until the live readiness checklist has passed with enough resolved paper samples, fitted calibration, positive ranking validation, and verified alerting.
 
 ---
 
-## Quick Start
+## Architecture
 
-### 1. Installation
+The codebase is organized around a runtime engine with small domain modules.
+
+```text
+weatherbot/
+├── bot.py                         # CLI entrypoint and runtime commands
+├── backfill.py                    # Historical data backfill helper
+├── dashboard.py                   # Local dashboard/TUI entrypoint
+├── requirements.txt               # Python dependencies
+├── weatherbot.service             # systemd service template
+├── src/
+│   ├── ai/                        # Groq diagnostics and Ouroboros loop
+│   ├── alpha/                     # Fair value engine
+│   ├── backtest/                  # Ranking and walk-forward backtests
+│   ├── data/                      # DuckDB moat, QA, feedback, schema
+│   ├── features/                  # Feature construction
+│   ├── ml/                        # Calibration, model training, tuning
+│   ├── notifications/             # Telegram and desk metrics
+│   ├── probability/               # Probability inference/calibration
+│   ├── settlement/                # Station mapping for settlement
+│   ├── storage/                   # JSON state and market persistence
+│   ├── strategy/                  # EV, sizing, filters, risk, scoring
+│   ├── trading/                   # Engine, scanner, resolver, CLOB, paper account
+│   ├── utils/                     # Feature flags and shared utilities
+│   └── weather/                   # Forecast/actual APIs and collectors
+├── tests/
+│   ├── test_paper_logic.py        # Paper account and paper resolver coverage
+│   └── test_fair_value_no_leakage.py
+├── data/                          # Runtime data, models, market state
+└── logs/                          # Runtime and paper-trading logs
+```
+
+### Runtime Flow
+
+```text
+scan markets
+  -> fetch forecasts and market/orderbook data
+  -> estimate probability and edge
+  -> apply filters, risk checks, and AI review
+  -> record paper trade and/or send signal
+  -> resolve open positions when market outcome is available
+  -> update paper account, state, logs, and feedback datasets
+```
+
+### Core Modules
+
+- `src/trading/engine.py` orchestrates scans, health checks, reports, and runtime loops.
+- `src/trading/scanner.py` discovers markets, builds candidate trades, records paper positions, and emits signals.
+- `src/trading/resolver.py` resolves live and paper positions, updates market status, and records settlement PnL.
+- `src/trading/paper_account.py` manages the separate paper-trading balance, locked stake, fees, wins/losses, drawdown, and reports.
+- `src/trading/polymarket.py` wraps Polymarket Gamma and CLOB orderbook access.
+- `src/weather/apis.py` fetches forecasts and actual temperatures.
+- `src/weather/collectors/open_meteo.py` stores multi-model forecast runs in the DuckDB moat.
+- `src/data/moat_manager.py` owns the DuckDB forecast/quote/calibration store.
+- `src/strategy/*` contains filters, sizing, portfolio risk, signal quality, and ranking.
+- `src/ml/*` contains lightweight calibration, XGBoost/logistic training, tuning, and audits.
+
+---
+
+## Paper Trading Model
+
+Paper trading is intentionally separate from live trading.
+
+Entry:
+
+- `record_trade(cost)` increments total trades.
+- The stake is locked from paper cash.
+- Entry friction is charged as `FEE_RATE + SLIPPAGE_RATE`.
+- Entry friction is included in net paper PnL.
+
+Settlement:
+
+- `resolver.py` computes binary settlement PnL from shares, entry price, stake, and trading fee.
+- `record_result(won, pnl, cost)` returns `cost + pnl` to paper cash.
+- Paper-only resolution does not mutate live cash balance or live win/loss counters.
+- Closed live positions are not allowed to mask open paper positions.
+
+Covered by `tests/test_paper_logic.py`.
+
+---
+
+## External Services
+
+| Service | Credential | Use |
+| --- | --- | --- |
+| Open-Meteo | none | ECMWF/GFS/HRRR forecasts and archive data |
+| Meteostat | none | Historical actual fallback |
+| Aviation Weather/METAR | none | Station observation support |
+| Polymarket Gamma | none | Market metadata |
+| Polymarket CLOB | live wallet credentials | Executable orderbook and live order placement |
+| Groq | `GROQ_API_KEY` | AI diagnostics and trade review |
+| Telegram | bot token and chat IDs | Alerts, status, reports |
+
+---
+
+## Installation
+
 ```bash
 git clone git@github.com:thelambdaone-commits/super-journey-weather-bot.git
 cd super-journey-weather-bot
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2. Configuration
-Copy the environment template and fill in your API keys:
-```bash
 cp .env.example .env
 ```
 
-### 3. Safe Execution
-The bot is controlled via a unified CLI:
+Edit `.env` before running the bot.
+
+Minimum useful variables:
+
 ```bash
-# Start paper trading with Telegram signal alerts
+PAPER_MODE=True
+SIGNAL_MODE=True
+LIVE_TRADE=False
+SCAN_INTERVAL=900
+GROQ_API_KEY=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+TELEGRAM_SIGNAL_CHAT_ID=...
+```
+
+Live-only variables, required only for live execution:
+
+```bash
+LIVE_TRADE_CONFIRM=true
+POLYMARKET_PRIVATE_KEY=...
+```
+
+---
+
+## CLI Commands
+
+```bash
+# Run paper/signal mode
 python bot.py run --paper-on --signal-on --live-off --tui-off
 
-# View status
+# Status and reports
 python bot.py status
-
-# Generate an audit report
+python bot.py report
+python bot.py paper-report
 python bot.py audit
 
-# View paper trading performance
-python bot.py paper-report
+# Resolution and actuals
+python bot.py auto-resolve
+python bot.py resolve
+python bot.py poll --date YYYY-MM-DD
 
-# Run AI diagnostics
-python bot.py ai-status
-
-# Train ML model
-python bot.py train
-
-# Calibrate probabilities
-python bot.py calibrate
-
-# Hyperparameter tuning (NEW)
-python bot.py tune --trials 32 --timeout 300
-
-# Backfill historical temperatures
-python bot.py backfill --actuals
-
-# Data readiness checks
+# Data/model diagnostics
 python bot.py data-qa
 python bot.py learning-validation
+python bot.py ai-status
 python bot.py ranking-backtest
+python bot.py walk-forward
 
-# Telegram connectivity check
+# Model work
+python bot.py train
+python bot.py tune --trials 32 --timeout 300
+python bot.py calibrate
+python bot.py ouroboros
+
+# Telegram connectivity
 python bot.py test
 ```
 
-Recommended long-running command:
-```bash
-nohup ./venv/bin/python -u bot.py run --paper-on --signal-on --live-off --tui-off > logs/signal_bot.log 2>&1 &
-```
-
-Current production-safe mode is paper/signal only. Do not enable `--live-on` until the live readiness checklist passes.
-
----
-
-## Ouroboros Auto-Improvement Loop
-
-Ouroboros is a guarded auto-improvement loop that learns from paper-trading decisions and market resolutions. It is designed to retrain and recalibrate only when there are enough new resolved samples and the daily retrain limit has not been reached.
-
-### Architecture
-```
-SCAN → SIGNAL → TRADE → RESOLUTION → FEEDBACK
-                                      ↓
-                            OUROBOROS LOOP
-                                      ↓
-                            retrain (si conditions réunies)
-                                      ↓
-                            nouveau modèle + calibration
-```
-
-### GEM Tiers
-
-| Tier | Score GEM | Condition |
-|------|-----------|-----------|
-| Gold | >= 0.95 | strongest candidate |
-| Silver | >= 0.85 | high confidence |
-| Bronze | >= 0.75 | minimum GEM tier |
-
-### Commands
+Long-running paper command:
 
 ```bash
-# Check (dry run)
-python bot.py ouroboros
-
-# With parameters
-python bot.py ouroboros --min-resolutions 10 --max-retrain-per-day 2 --patience 5 --timeout 300
+setsid ./venv/bin/python -u bot.py run --paper-on --signal-on --live-off --tui-off > logs/signal_bot.log 2>&1 < /dev/null &
 ```
 
-### Cron Job
+Check the running process:
+
 ```bash
-*/30 * * * * cd /home/74h2hfpyj79x/weatherbot && venv/bin/python bot.py ouroboros --min-resolutions 10 --max-retrain-per-day 2 --timeout 300 >> logs/ouroboros.log 2>&1
+ps -ef | grep '[p]ython.*bot.py run'
+tail -f logs/signal_bot.log
 ```
 
-### Notifications
+---
 
-Add to `.env`:
+## Testing
+
+Run the full suite:
+
 ```bash
-OUROBOROS_TELEGRAM_FEED=true
+./venv/bin/python -m pytest -q
 ```
 
-Events notified:
-- SKIP: not enough data or patience not met.
-- START: retrain started.
-- SUCCESS: retrain succeeded.
-- FAILED: retrain failed and rollback was attempted.
-- TEST: notification check.
+Run paper-specific tests:
 
-Current state: Ouroboros is configured and guarded, but `Autoimprovement ready` is expected to remain `no` until calibration is fitted and the learning readiness gate passes.
-
----
-
-## Reporting & Notifications
-
-Professionalized reporting via Telegram:
-- **Hourly Reports**: Summary of PnL, Drawdown, Drift, API Status, and Diversification.
-- **GEM Alerts**: Real-time, high-conviction signal notifications (Score > 0.85).
-- **Ouroboros**: Auto-improvement loop notifications.
-- **Health Checks**: Instant alerts on API failures or critical drift detection.
-
----
-
-## Current Operational Status
-
-Verified on 2026-04-26:
-
-- Telegram main channel: OK.
-- Telegram signal channel: OK.
-- Runtime process: `bot.py run --paper-on --signal-on --tui-off`.
-- Live trading: disabled.
-- AI Unit Awareness: OK (°C/°F differentiated).
-- Weather Sources: Optimized (GFS Seamless + real HRRR US).
-
-### Dataset Status
-| Metric | Value |
-|--------|-------|
-| Total rows | 446 |
-| Resolved rows | 74 |
-| Decision rows | 252 |
-| Readiness score | 64/100 |
-| Readiness label | monitor |
-| Ready for scoring fit | no |
-| Ready for live | no |
-
-### Bot Commands
-| Command | Status | Detail |
-|---------|--------|--------|
-| `bot.py status` | OK | Balance: $9,879.24, 6 trades, 33% WR |
-| `bot.py test` | OK | Telegram main channel OK |
-| signal-channel test | OK | `TELEGRAM_SIGNAL_CHAT_ID` OK |
-| `bot.py ai-status` | OK | Groq OK, Unit-aware probe OK |
-| `bot.py data-qa` | OK | live gate currently no-go |
-| `bot.py learning-validation` | OK | readiness 64/100 |
-| `bot.py ranking-backtest` | OK | Top-K backtest enabled |
-| `bot.py ouroboros` | OK | skip until conditions pass |
-
-### Ouroboros State
-```
-Autoimprovement ready: no
-Calibration fitted: no
-Learning readiness: 64/100
-Expected action: skip until enough new resolutions exist
-```
-
----
-
-## Project Structure
-
-```
-weatherbot/
-├── bot.py                    # Main CLI
-├── backfill.py              # Historical data backfill
-├── dashboard.py            # TUI dashboard
-├── requirements.txt        # Dependencies
-├── .env                   # API keys (private)
-├── README.md               # This file
-├── src/
-│   ├── alpha/               # [V3] Fair Value Engine
-│   ├── data/                # [V3] Moat Manager (DuckDB)
-│   ├── settlement/          # [V3] Station Maps
-│   ├── strategy/            # Risk, Sizing, Scoring
-│   ├── ml/                  # Bayesian, Anomaly, Metrics
-│   ├── trading/             # VWAP, Tick-Size, CLOB
-│   ├── weather/             # Multi-model collectors
-│   └── backtest/            # Baseline benchmarks
-├── data/
-│   ├── dataset_rows.jsonl
-│   ├── ml_model.json
-│   ├── calibration.pkl
-│   ├── ouroboros_state.json
-│   ├── backups/
-│   └── ...
-└── logs/
-    ├── bot_runtime.log
-    ├── ouroboros.log
-    ├── paper_trades.json
-```
-
----
-
-## Roadmap
-- [x] Ouroboros loop with lock, backup, rollback and guarded retraining.
-- [x] Polymarket CLOB orderbook pricing for executable bid/ask.
-- [x] Telegram main and signal-channel notifications.
-- [x] Open-Meteo archive and Meteostat fallback for actual temperatures.
-- [x] Micro-live caps ($10/$50) and drawdown alerts (5%/15%).
-- [x] Hyperparameter tuning with safety gates.
-- [x] AI Unit Awareness (°C/°F) and GFS/HRRR optimization.
-- [ ] Fit and validate calibration after enough resolved rows.
-- [ ] Improve ranking until Top-K outperforms naive/random baselines.
-- [ ] Run 30-60 days of monitored paper trading before any live exposure.
-
----
-
-## Live Readiness Checklist
-
-See `CHECKLIST_MICRO_LIVE.md` for the complete checklist.
-
-### Quick Summary
-| Criteria | Threshold |
-|----------|-----------|
-| Resolved rows | 100+ |
-| Paper run | 14+ days |
-| Calibration | fitted |
-| Top-K vs baseline | positive |
-| Max drawdown | < 10% |
-| Telegram alerts | verified |
-| Live cap | $10 configured |
-
----
-
-## Ops & Deployment
-
-### Systemd Auto-Restart
-Copy the service file and enable:
 ```bash
-sudo cp weatherbot.service /etc/systemd/system/
+./venv/bin/python -m pytest tests/test_paper_logic.py -q
+```
+
+Current local validation on 2026-04-27:
+
+- `tests/test_paper_logic.py`: 8 passed
+- full suite: 9 passed
+- `git diff --check`: clean
+
+---
+
+## Requirements
+
+`requirements.txt` pins the direct runtime and test dependencies used by the current codebase:
+
+- HTTP/API clients: `requests`, `httpx`, `groq`
+- Configuration/UI: `python-dotenv`, `textual`, `rich`, `pydantic`
+- Data/analytics: `numpy`, `pandas`, `scipy`, `duckdb`, `polars`
+- Weather/data fallback: `meteostat`, `pytz`
+- ML: `scikit-learn`, `joblib`, `xgboost`
+- Polymarket live adapter: `py-clob-client`
+- Tests: `pytest`
+
+`xgboost` is listed for model training/tuning paths. The lightweight JSON calibration path can run without training an XGBoost model, but the dependency should be installed for the full command set.
+
+---
+
+## Data and Logs
+
+Important runtime files:
+
+```text
+data/state.json                 # live/state accounting
+data/paper_account.json         # paper account stats
+data/markets/*.json             # per-market snapshots and positions
+data/weather_moat.db            # DuckDB forecast/quote moat
+data/ouroboros_state.json       # auto-improvement state
+logs/signal_bot.log             # long-running bot log
+logs/paper_trades.json          # paper trade journal
+logs/bot_runtime.log            # runtime/service log
+```
+
+Do not commit `.env`, runtime logs, or private credentials.
+
+---
+
+## Deployment
+
+### Manual Detached Process
+
+```bash
+setsid ./venv/bin/python -u bot.py run --paper-on --signal-on --live-off --tui-off > logs/signal_bot.log 2>&1 < /dev/null &
+```
+
+### systemd Template
+
+The repo includes `weatherbot.service`. Review `ExecStart`, environment, user, and live flags before enabling it.
+
+```bash
+sudo cp weatherbot.service /etc/systemd/system/weatherbot.service
 sudo systemctl daemon-reload
 sudo systemctl enable weatherbot
 sudo systemctl start weatherbot
+sudo systemctl status weatherbot
 ```
 
 ---
 
-## Disclaimer
+## Operational Status
 
-**WeatherBot** est un système de trading quantitatif expérimental conçu à des fins éducatives et de recherche.
+Last verified locally on 2026-04-27:
 
-### Limitations
-- **Pas de conseil financier** : ce systeme ne constitue pas un conseil en investissement.
-- **Paper Trading actuellement** : le mode live est volontairement bloque par des garde-fous.
-- **Risque de perte** : les marches predictionnels comportent des risques significatifs.
-- **Validation requise** : au minimum 30-60 jours de validation empirique avant tout capital reel.
+- Bot mode: `paper_mode,signal_mode,tui_off`
+- Live trading: disabled
+- APIs during network-enabled run: Telegram connected, Groq connected, Polymarket connected, Open-Meteo connected
+- Bot status: balance `$9,879.24`, 6 resolved live/state trades, 33% win rate
+- Paper report: separate paper account active with paper trades and open paper positions
+- Latest scan outcome: no new paper trade when AI/orderbook filters rejected candidates
 
-### Etat actuel
-Ce systeme est actuellement en phase de validation paper trading. Aucun capital ne doit etre engage sans donnees resolues suffisantes, calibration fitted, backtest robuste et validation operationnelle prolongee.
-
-*Ce projet est distribué tel quel, sans garantie d'aucune sorte.*
+No result in this repository should be interpreted as investment advice. This system is experimental research software and must be validated over a long paper-trading period before any real capital is considered.
 
 ---
 
-## 📜 License
-MIT License - See LICENSE file for details
+## Maintenance Checklist
+
+Before pushing a production-facing change:
+
+```bash
+./venv/bin/python -m pytest -q
+./venv/bin/python -m py_compile bot.py src/trading/paper_account.py src/trading/resolver.py src/trading/scanner.py
+git diff --check
+git status --short
+```
+
+For paper/resolver changes, also run:
+
+```bash
+./venv/bin/python -m pytest tests/test_paper_logic.py -q
+```
+
+---
+
+## License
+
+MIT License. See `LICENSE`.

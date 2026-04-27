@@ -3,14 +3,12 @@ Market resolution logic with real-time actual polling.
 """
 from __future__ import annotations
 import time
-import json
-from pathlib import Path
-from .idempotence import get_idempotence_manager
 from src.notifications.telegram_control_center import send_trust_update
 from src.notifications.desk_metrics import log_event
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from ..utils.feature_flags import is_enabled
 from ..settlement.station_map import get_station_info
+from ..weather.apis import get_actual_temp
 from ..weather.locations import LOCATIONS
 from .polymarket import check_market_resolved
 
@@ -58,23 +56,28 @@ class MarketResolver:
                 if actual is not None:
                     market.actual_temp = actual
                     # Full resolution
+                    had_live_open = bool(market.position and market.position.get("status") == "open")
                     new_balance, won, pnl = self.resolve_market(market, state.balance)
                     if won is not None:
-                        state.balance = new_balance
-                        if won: state.wins += 1
-                        else: state.losses += 1
+                        if had_live_open:
+                            state.balance = new_balance
+                            if won: state.wins += 1
+                            else: state.losses += 1
                         
                         # Trust Engine Update
+                        resolved_pos = market.position or market.paper_position or {}
+                        display_pnl = pnl if pnl is not None else resolved_pos.get("pnl", 0.0)
+                        cost = resolved_pos.get("cost") or 0.0
                         result = "WIN" if won else "LOSS"
-                        pnl_pct = (pnl / market.position["cost"]) * 100 if market.position and market.position.get("cost") else 0
+                        pnl_pct = (display_pnl / cost) * 100 if cost else 0
                         send_trust_update(market.city, f"{market.date}", result, pnl_pct)
 
                         # Desk Pro Resolution Logging
                         log_event(
                             "trade_resolved",
                             city=market.city,
-                            confidence=market.position.get("ml", {}).get("tier", "MEDIUM"),
-                            setup=market.position.get("setup", "divergence"),
+                            confidence=resolved_pos.get("ml", {}).get("tier", "MEDIUM"),
+                            setup=resolved_pos.get("setup", "divergence"),
                             net_pnl_pct=pnl_pct,
                             fees_pct=0.2, # Static placeholder
                             slippage_pct=0.1, # Static placeholder
@@ -87,7 +90,7 @@ class MarketResolver:
                             "date": market.date,
                             "actual": actual,
                             "won": won,
-                            "pnl": pnl
+                            "pnl": display_pnl
                         })
                     self.engine.storage.save_market(market)
                 else:
@@ -175,10 +178,12 @@ class MarketResolver:
     def resolve_market(self, market, balance: float):
         """Resolve a single market (live and paper)."""
         # 1. Check if we have anything to resolve
-        if not market.position and not market.paper_position:
+        live_open = bool(market.position and market.position.get("status") == "open")
+        paper_open = bool(market.paper_position and market.paper_position.get("status") == "open")
+        if not live_open and not paper_open:
             return balance, None, None
 
-        market_id = (market.position or market.paper_position)["market_id"]
+        market_id = (market.position if live_open else market.paper_position)["market_id"]
         won = check_market_resolved(market_id)
         if won is None:
             return balance, None, None
@@ -232,7 +237,7 @@ class MarketResolver:
                 "status": "closed"
             })
             # Update separate paper account
-            self.engine.paper_account.record_result(won, paper_pnl)
+            self.engine.paper_account.record_result(won, paper_pnl, cost=size)
             
             # If no live position, update market status based on paper
             if not market.position:
@@ -252,14 +257,16 @@ class MarketResolver:
 
             # Load state for balance
             state = self.engine.storage.load_state()
+            had_live_open = bool(market.position and market.position.get("status") == "open")
             new_balance, won, pnl = self.resolve_market(market, state.balance)
             if won is None:
                 continue
 
-            state.balance = new_balance
-            if won: state.wins += 1
-            else: state.losses += 1
-            self.engine.storage.save_state(state)
+            if had_live_open:
+                state.balance = new_balance
+                if won: state.wins += 1
+                else: state.losses += 1
+                self.engine.storage.save_state(state)
 
             unit = "°F" if market.unit == "F" else "°C"
             # Prefer position if available, else paper

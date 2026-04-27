@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
 
 @dataclass
 class PaperStats:
@@ -28,14 +27,17 @@ class PaperAccount:
     
     def __init__(self, data_dir: str = "data"):
         self.file_path = Path(data_dir) / "paper_account.json"
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self.stats = self._load()
 
     def _load(self) -> PaperStats:
         if self.file_path.exists():
             try:
                 data = json.loads(self.file_path.read_text(encoding="utf-8"))
-                return PaperStats(**data)
-            except (Exception,) as e:
+                valid_fields = PaperStats.__dataclass_fields__
+                filtered = {key: value for key, value in data.items() if key in valid_fields}
+                return PaperStats(**filtered)
+            except (Exception,):
                 pass
         return PaperStats()
 
@@ -46,36 +48,46 @@ class PaperAccount:
             encoding="utf-8"
         )
 
+    def get_state(self) -> PaperStats:
+        """Return current paper account stats."""
+        return self.stats
+
     def record_trade(self, cost: float):
-        """Record a new paper trade entry and deduct simulated fees."""
+        """Record a new paper trade entry and lock stake plus entry friction."""
+        if cost <= 0:
+            raise ValueError("paper trade cost must be positive")
+
         self.stats.total_trades += 1
         
         # Apply entry friction (fee + slippage)
         entry_friction = cost * (self.FEE_RATE + self.SLIPPAGE_RATE)
+        total_deduction = cost + entry_friction
+
         self.stats.total_fees_paid += entry_friction
         self.stats.total_pnl -= entry_friction
-        self.stats.balance = round(self.stats.balance - entry_friction, 2)
+        self.stats.balance = round(self.stats.balance - total_deduction, 2)
         
         self.save()
 
-    def record_result(self, won: bool, pnl: float):
-        """Record the result of a paper trade, applying exit friction."""
-        # Friction on exit is usually lower for binary options (resolution is direct)
-        # but slippage might have occurred if we sold before resolution.
-        # Since we mostly resolve at settlement, we only apply a small settlement fee simulation if applicable.
-        # However, to be conservative, let's apply a 0.5% "settlement/latency" cost.
-        exit_friction = abs(pnl) * 0.005 
-        
-        actual_pnl = pnl - exit_friction
+    def record_result(self, won: bool, pnl: float, cost: float):
+        """Record settlement of a paper trade.
+
+        ``pnl`` is the resolver-calculated net result relative to stake. The
+        stake was already locked by ``record_trade``, so settlement returns
+        ``cost + pnl`` to the account.
+        """
+        if cost <= 0:
+            raise ValueError("paper trade cost must be positive")
+
+        settlement_cashflow = cost + pnl
         
         if won:
             self.stats.wins += 1
         else:
             self.stats.losses += 1
         
-        self.stats.total_fees_paid += exit_friction
-        self.stats.total_pnl += actual_pnl
-        self.stats.balance = round(self.stats.balance + actual_pnl, 2)
+        self.stats.total_pnl += pnl
+        self.stats.balance = round(self.stats.balance + settlement_cashflow, 2)
         self.stats.peak_balance = max(self.stats.peak_balance, self.stats.balance)
         
         if self.stats.peak_balance > 0:
@@ -86,7 +98,8 @@ class PaperAccount:
 
     def get_report(self) -> str:
         """Return a formatted report of paper performance."""
-        wr = (self.stats.wins / self.stats.total_trades * 100) if self.stats.total_trades > 0 else 0
+        settled = self.stats.wins + self.stats.losses
+        wr = (self.stats.wins / settled * 100) if settled > 0 else 0
         roi = (self.stats.total_pnl / self.stats.starting_balance * 100)
         pf = (self.stats.wins / max(self.stats.losses, 1)) # Simplified Profit Factor for now
         

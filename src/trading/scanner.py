@@ -89,8 +89,10 @@ class MarketScanner:
                 
                 outcomes = get_outcomes(event)
                 for outcome in outcomes:
-                    orderbook = refresh_outcome_orderbook(event["id"], outcome["name"])
+                    if not refresh_outcome_orderbook(outcome):
+                        continue
                     best_ask = float(outcome["ask"])
+                    orderbook = {"asks": [{"price": outcome["ask"], "size": outcome.get("best_ask_size", 0.0)}]}
                     vwap_ask = get_vwap_for_size(orderbook, target_usd=100.0, side="ask")
                     tick_size = 0.01 
 

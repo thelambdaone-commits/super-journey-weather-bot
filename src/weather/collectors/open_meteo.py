@@ -45,7 +45,8 @@ class MultiModelCollector:
         
         for city, config in self.cities.items():
             try:
-                lat, lon = config.get("lat"), config.get("lon")
+                lat = getattr(config, "lat", None)
+                lon = getattr(config, "lon", None)
                 if not lat or not lon: continue
                 
                 # Fetch more models but filter them during processing or weighting

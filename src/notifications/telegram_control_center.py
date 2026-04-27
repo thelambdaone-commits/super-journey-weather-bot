@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from dotenv import load_dotenv
+
+# Load credentials from .env
+load_dotenv()
 
 # =====================================================
 # CONFIG
@@ -81,7 +85,7 @@ Why:
 
 #{"".join(city.split("-"))} #Alpha
 """
-    send_message(msg.strip())
+    return send_message(msg.strip())
 
 def send_no_trade(city, reason_list=None):
     """🧊 TEMPLATE #2 — NO TRADE"""
@@ -96,7 +100,7 @@ Reason:
 
 Capital preserved.
 """
-    send_message(msg.strip())
+    return send_message(msg.strip())
 
 def send_daily_report(stats: dict):
     """📊 DAILY LIVE REPORT"""
@@ -113,7 +117,7 @@ Latency avg: {stats.get("latency", 1.3):.1f}s
 
 Time: {now()}
 """
-    send_message(msg.strip())
+    return send_message(msg.strip())
 
 
 def send_incident(message: str, severity: str = "WARNING"):
@@ -127,7 +131,7 @@ def send_incident(message: str, severity: str = "WARNING"):
 Status: Monitoring
 Time: {now()}
 """
-    send_message(msg.strip())
+    return send_message(msg.strip())
 
 def send_weekly_report(stats: dict):
     """🏆 TEMPLATE #4 — WEEKLY TRUST REPORT"""
@@ -144,7 +148,7 @@ Profit Factor: {stats.get("pf", 1.0):.2f}
 
 System Status: <b>HEALTHY</b>
 """
-    send_message(msg.strip())
+    return send_message(msg.strip())
 
 def send_crash(module, error):
     """🚨 TEMPLATE #5 — BOT ISSUE DETECTED"""
@@ -160,7 +164,7 @@ Action:
 
 Status: <b>Recovering</b>
 """
-    send_message(msg.strip())
+    return send_message(msg.strip())
 
 def send_cto_report(repo_score=7.8, notes=None):
     """🧠 TEMPLATE #6 — MONDAY CTO REPORT"""
@@ -176,7 +180,7 @@ Focus This Week:
 Rule:
 PnL net > ego
 """
-    send_message(msg.strip())
+    return send_message(msg.strip())
 
 def send_trust_update(city, market, result, pnl):
     """🔥 TEMPLATE #7 — TRUST ENGINE UPDATE"""
@@ -190,7 +194,7 @@ PnL: <b>{pct(pnl)}</b>
 
 Transparency builds alpha.
 """
-    send_message(msg.strip())
+    return send_message(msg.strip())
 
 # =====================================================
 # CLI TEST
@@ -202,16 +206,21 @@ if __name__ == "__main__":
     cmd = sys.argv[1]
     
     if cmd == "signal":
-        send_signal("Paris", "ABOVE 18.5°C", 0.63, 0.54, 0.09, "HIGH", 1.5)
+        res = send_signal("Paris", "ABOVE 18.5°C", 0.63, 0.54, 0.09, "HIGH", 1.5)
     elif cmd == "notrade":
-        send_no_trade("Madrid", ["Edge too small (+1.2%)", "Spread too wide"])
+        res = send_no_trade("Madrid", ["Edge too small (+1.2%)", "Spread too wide"])
     elif cmd == "daily":
-        send_daily_report({"signals": 5, "wins": 3, "losses": 2, "winrate": 60, "pnl": 2.8, "fees": -0.4, "slippage": -0.2, "sharpe": 1.41, "drawdown": -3.1, "best": "Paris", "worst": "Rome"})
+        res = send_daily_report({"signals": 5, "wins": 3, "losses": 2, "winrate": 60, "pnl": 2.8, "fees": -0.4, "slippage": -0.2, "sharpe": 1.41, "drawdown": -3.1, "best": "Paris", "worst": "Rome"})
     elif cmd == "weekly":
-        send_weekly_report({"week": 7.6, "month": 12.4, "ytd": 31.8, "trades": 24, "winrate": 58, "pf": 1.42})
+        res = send_weekly_report({"week": 7.6, "month": 12.4, "ytd": 31.8, "trades": 24, "winrate": 58, "pf": 1.42})
     elif cmd == "crash":
-        send_crash("scanner.py", "TimeoutError")
+        res = send_crash("scanner.py", "TimeoutError")
     elif cmd == "cto":
-        send_cto_report()
+        res = send_cto_report()
     elif cmd == "trust":
-        send_trust_update("Paris", "ABOVE 18.5°C", "WON", 1.8)
+        res = send_trust_update("Paris", "ABOVE 18.5°C", "WON", 1.8)
+    else:
+        print(f"Unknown command: {cmd}")
+        sys.exit(1)
+
+    print(f"Telegram {cmd}: {'OK' if res else 'FAILED'}")

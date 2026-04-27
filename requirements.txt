@@ -5,12 +5,16 @@ python-dotenv==1.2.2
 groq==1.2.0
 joblib==1.5.3
 scikit-learn==1.8.0
+scipy==1.17.1
 meteostat==2.1.4
 pandas==3.0.2
 numpy==2.4.4
+duckdb==1.5.2
+polars==1.40.1
 pydantic==2.13.3
 httpx==0.28.1
 pytz==2023.4
 rich==15.0.0
 py-clob-client==0.34.6
+pytest==9.0.3
 xgboost>=2.1.0,<3.0.0
