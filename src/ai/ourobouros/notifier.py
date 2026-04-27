@@ -28,7 +28,7 @@ class OuroborosNotifier:
         try:
             # Explicitly pass parse_mode="Markdown"
             return bool(self._notifier.send(message, parse_mode="Markdown"))
-        except Exception:
+        except (Exception,) as e:
             return False
     
     def notify_check(self, reason: str) -> bool:

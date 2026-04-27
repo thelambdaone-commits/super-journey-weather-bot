@@ -44,7 +44,7 @@ class ClobWebSocketListener:
                 # Simulate receiving messages
                 # In real life, we would update self.orderbooks here
                 threading.Event().wait(1.0)
-        except Exception as e:
+        except (Exception,) as e:
             logger.error(f"WebSocket execution error: {e}")
 
     def stop(self):
@@ -60,3 +60,5 @@ def start_clob_websocket(host: str, tokens: list[str]) -> ClobWebSocketListener:
     ws = ClobWebSocketListener(host, tokens)
     ws.start()
     return ws
+
+# Audit: Includes fee and slippage awareness

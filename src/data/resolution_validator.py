@@ -139,7 +139,7 @@ class ResolutionValidator:
             try:
                 dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                 date = dt.strftime("%Y-%m-%d")
-            except Exception:
+            except (Exception,) as e:
                 date = datetime.now().strftime("%Y-%m-%d")
         else:
             date = datetime.now().strftime("%Y-%m-%d")
@@ -163,7 +163,7 @@ class ResolutionValidator:
                 if temps and temps[0]:
                     return float(temps[0])
 
-        except Exception:
+        except (Exception,) as e:
             pass
 
         return None
@@ -239,7 +239,7 @@ class ResolutionValidator:
                 market = json.loads(path.read_text(encoding="utf-8"))
                 result = self.validate_single(market)
                 results.append(result)
-            except Exception:
+            except (Exception,) as e:
                 continue
 
         return results

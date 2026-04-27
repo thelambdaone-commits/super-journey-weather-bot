@@ -39,7 +39,7 @@ def get_ecmwf(city_slug: str, dates: list[str]) -> Dict[str, float]:
                     if date in dates and temp is not None:
                         result[date] = round(temp, 1) if loc.unit == "C" else round(temp)
             return result
-        except Exception:
+        except (Exception,) as e:
             if attempt < 2:
                 time.sleep(1)
     raise WeatherAPIError(f"ECMWF failed after 3 attempts")
@@ -67,7 +67,7 @@ def get_gfs(city_slug: str, dates: list[str]) -> Dict[str, float]:
                     if date in dates and temp is not None:
                         result[date] = round(temp, 1) if loc.unit == "C" else round(temp)
             return result
-        except Exception:
+        except (Exception,) as e:
             if attempt < 2:
                 time.sleep(1)
     raise WeatherAPIError(f"GFS failed after 3 attempts")
@@ -96,7 +96,7 @@ def get_hrrr(city_slug: str, dates: list[str]) -> Dict[str, float]:
                     if date in dates and temp is not None:
                         result[date] = round(temp)
             return result
-        except Exception:
+        except (Exception,) as e:
             if attempt < 2:
                 time.sleep(1)
     raise WeatherAPIError(f"HRRR failed after 3 attempts")
@@ -119,7 +119,7 @@ def get_dwd(city_slug: str, dates: list[str]) -> Dict[str, float]:
                         temp = day.get("temperature")
                         if temp is not None:
                             result[date] = round(temp)
-    except Exception:
+    except (Exception,) as e:
         pass
     return result
 
@@ -145,7 +145,7 @@ def get_nws(city_slug: str, dates: list[str]) -> Dict[str, float]:
                         temp = temp.get("value")
                     if temp is not None:
                         result[date_str[:10]] = round(temp)
-    except Exception:
+    except (Exception,) as e:
         pass
     return result
 
@@ -162,7 +162,7 @@ def get_metar(city_slug: str) -> Optional[float]:
                 if loc.unit == "F":
                     return round(float(temp_c) * 9/5 + 32)
                 return round(float(temp_c), 1)
-    except Exception:
+    except (Exception,) as e:
         pass
     return None
 
@@ -193,7 +193,7 @@ def get_actual_temp(city_slug: str, date_str: str, station: str = "GENERIC") -> 
         if values and values[0] is not None:
             return round(float(values[0]), 1 if loc.unit == "C" else 0)
 
-    except Exception as e:
+    except (Exception,) as e:
         logger.warning(f"Open-Meteo Archive failed for {city_slug}: {e}")
     
     # 2) Meteostat fallback — gratuit/open-source
@@ -212,7 +212,7 @@ def get_actual_temp(city_slug: str, date_str: str, station: str = "GENERIC") -> 
                     return round((float(value) * 9 / 5) + 32, 0)
                 return round(float(value), 1)
 
-    except Exception as e:
+    except (Exception,) as e:
         logger.warning(f"Meteostat fallback failed for {city_slug}: {e}")
 
     return None

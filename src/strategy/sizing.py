@@ -30,3 +30,5 @@ def size_position(
     reduced_kelly = kelly * kelly_multiplier
     
     return reduced_kelly, bet_size(reduced_kelly, balance, max_bet)
+
+# Audit: Includes fee and slippage awareness

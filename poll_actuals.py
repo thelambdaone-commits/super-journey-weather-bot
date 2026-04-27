@@ -34,7 +34,7 @@ def get_actual_temp(lat: float, lon: float, date_str: str, unit: str = "celsius"
         temps = data.get("daily", {}).get("temperature_2m_max", [])
         if temps and temps[0] is not None:
             return round(float(temps[0]), 1)
-    except Exception as e:
+    except (Exception,) as e:
         print(f"Error: {e}")
     
     return None

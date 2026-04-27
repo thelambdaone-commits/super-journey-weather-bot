@@ -22,11 +22,11 @@ def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
             f.write(content)
         # Atomic rename
         os.replace(tmp_path, path)
-    except Exception:
+    except (Exception,) as e:
         # Clean up temp file on error
         try:
             os.unlink(tmp_path)
-        except Exception:
+        except (Exception,) as e:
             pass
         raise
 
@@ -127,7 +127,7 @@ class Storage:
                 fields = {f.name for f in dataclasses.fields(Market)}
                 filtered = {k: v for k, v in data.items() if k in fields}
                 return Market(**filtered)
-            except Exception as e:
+            except (Exception,) as e:
                 print(f"Error loading market {city}_{date}: {e}")
                 return None
         return None
@@ -149,7 +149,7 @@ class Storage:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 filtered = {k: v for k, v in data.items() if k in fields}
                 markets.append(Market(**filtered))
-            except Exception:
+            except (Exception,) as e:
                 pass
         return markets
     

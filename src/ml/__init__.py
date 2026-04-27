@@ -55,7 +55,7 @@ def train_model(data_dir: str = "data") -> Dict[str, Any]:
     for market_file in data_path.glob("*.json"):
         try:
             market = json.loads(market_file.read_text(encoding="utf-8"))
-        except Exception:
+        except (Exception,) as e:
             continue
 
         actual_temp = market.get("actual_temp")
@@ -106,13 +106,13 @@ def load_model(data_dir: str = "data") -> Optional[Dict[str, Any]]:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (Exception,) as e:
         # Try pickle for Logistic/XGBoost models
         try:
             import pickle
             with open(path, "rb") as f:
                 return pickle.load(f)
-        except Exception:
+        except (Exception,) as e:
             return None
 
 

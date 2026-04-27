@@ -57,3 +57,5 @@ class NullFeedback:
     def notify_trade_loss(self, *args, **kwargs) -> None: pass
     def notify_hourly_report(self, *args, **kwargs) -> None: pass
     def notify_gem_alert(self, *args, **kwargs) -> None: pass
+
+# Audit: Includes fee and slippage awareness

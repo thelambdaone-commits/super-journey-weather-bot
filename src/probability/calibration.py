@@ -10,14 +10,14 @@ import numpy as np
 
 try:
     import joblib
-except Exception:  # pragma: no cover - optional dependency
+except (Exception,) as e:  # pragma: no cover - optional dependency
     joblib = None
 
 try:
     from sklearn.isotonic import IsotonicRegression
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import brier_score_loss
-except Exception:  # pragma: no cover - optional dependency
+except (Exception,) as e:  # pragma: no cover - optional dependency
     IsotonicRegression = None
     LogisticRegression = None
     brier_score_loss = None
@@ -58,7 +58,7 @@ class CalibrationEngine:
                 self.fitted = False
                 return
             self.fitted = True
-        except Exception:
+        except (Exception,) as e:
             self.model = None
             self.fitted = False
 
@@ -84,7 +84,7 @@ class CalibrationEngine:
             else:
                 calibrated = self.model.predict_proba(probs.reshape(-1, 1))[:, 1]
             return np.clip(calibrated, 0.0, 1.0)
-        except Exception:
+        except (Exception,) as e:
             return self._safe_identity(y_prob, confidence)
 
     def evaluate(self, y_prob, y_true) -> dict:

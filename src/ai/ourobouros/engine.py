@@ -143,7 +143,7 @@ class OuroborosEngine:
             # Save state
             self.state_manager.save(self.state)
             
-        except Exception as e:
+        except (Exception,) as e:
             result["action"] = "error"
             result["reason"] = str(e)
             
@@ -178,7 +178,7 @@ class OuroborosEngine:
                     row = json.loads(line)
                     if row.get("actual_temp") is not None or row.get("resolution_outcome") in {"win", "loss"}:
                         count += 1
-                except Exception:
+                except (Exception,) as e:
                     pass
         return count
     

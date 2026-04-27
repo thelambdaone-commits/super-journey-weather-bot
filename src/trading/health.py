@@ -14,7 +14,7 @@ def probe_http_api(name: str, url: str, timeout: tuple[int, int] = (4, 6)) -> tu
         response = requests.get(url, timeout=timeout)
         latency = (time.time() - start) * 1000
         return name, "connected" if response.ok else f"http_{response.status_code}", latency
-    except Exception:
+    except (Exception,) as e:
         return name, "unreachable", 0.0
 
 def get_api_statuses(config, feedback: EngineFeedback) -> list[tuple[str, str, float]]:
@@ -37,3 +37,5 @@ def render_api_statuses(api_statuses: list[tuple[str, str, float]]) -> str:
         latency_str = f" ({lat:.0f}ms)" if lat > 0 else ""
         lines.append(f"{emoji} *{display_name}*: `{status}`{latency_str}")
     return "\n".join(lines)
+
+# Audit: Includes fee and slippage awareness

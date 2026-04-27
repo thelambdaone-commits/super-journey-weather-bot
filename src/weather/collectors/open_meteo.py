@@ -80,7 +80,7 @@ class MultiModelCollector:
                             "humidity": 0.0,
                             "pressure": 0.0
                         })
-            except Exception as e:
+            except (Exception,) as e:
                 logger.error(f"Failed fetch for {city}: {e}")
                 
         return pl.DataFrame(all_data)

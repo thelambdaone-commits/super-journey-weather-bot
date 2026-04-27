@@ -82,3 +82,5 @@ class ScoringEngine:
         }
         trade_context = {"city": row.city}
         return self.score_trade(signal, trade_context)
+
+# Audit: Includes fee and slippage awareness

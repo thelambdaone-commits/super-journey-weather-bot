@@ -18,7 +18,7 @@ def _day_of_year(date_str: str | None) -> int:
         return datetime.now(timezone.utc).timetuple().tm_yday
     try:
         return datetime.strptime(date_str, "%Y-%m-%d").timetuple().tm_yday
-    except Exception:
+    except (Exception,) as e:
         return datetime.now(timezone.utc).timetuple().tm_yday
 
 

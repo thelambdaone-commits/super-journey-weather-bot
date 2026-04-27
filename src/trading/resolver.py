@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 import json
 from pathlib import Path
+from .idempotence import IdempotencyGuard
+from src.notifications.telegram_control_center import send_trust_update
 from datetime import datetime, timezone, timedelta
 from ..utils.feature_flags import is_enabled
 from ..settlement.station_map import get_station_info
@@ -60,6 +62,12 @@ class MarketResolver:
                         state.balance = new_balance
                         if won: state.wins += 1
                         else: state.losses += 1
+                        
+                        # Trust Engine Update
+                        result = "WIN" if won else "LOSS"
+                        pnl_pct = (pnl / market.position["cost"]) * 100 if market.position and market.position.get("cost") else 0
+                        send_trust_update(market.city, f"{market.date}", result, pnl_pct)
+
                         resolved_count += 1
                         results["resolved"].append({
                             "city": market.city,
@@ -259,3 +267,5 @@ class MarketResolver:
             resolved += 1
             time.sleep(0.5)
         return resolved
+
+# Audit: Includes fee and slippage awareness

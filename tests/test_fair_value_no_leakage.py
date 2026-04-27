@@ -8,6 +8,11 @@ from src.data.moat_manager import MoatManager
 import polars as pl
 from pathlib import Path
 
+@pytest.fixture
+def temp_moat(tmp_path):
+    db_path = tmp_path / "test_moat.db"
+    return MoatManager(str(db_path))
+
 def test_no_leakage(temp_moat):
     """
     Ensure that get_latest_valid_forecasts only returns forecasts 
@@ -16,9 +21,6 @@ def test_no_leakage(temp_moat):
     engine = FairValueEngine(temp_moat)
     city = "PARIS"
     target_time = datetime(2026, 7, 10, 0, 0, 0, tzinfo=timezone.utc)
-    
-    # Clean up before test
-    temp_moat.conn.execute("DELETE FROM forecast_runs")
     
     # 1. Add a PAST forecast (Valid)
     past_run = datetime.now(timezone.utc) - timedelta(hours=6)
@@ -52,14 +54,12 @@ def test_no_leakage(temp_moat):
     
     # 3. Retrieve
     valid_forecasts = temp_moat.get_latest_valid_forecasts(city, target_time)
-    print(f"DEBUG: Found {len(valid_forecasts)} valid forecasts")
-    print(valid_forecasts)
     
     # Assertions
     assert len(valid_forecasts) == 1
     assert valid_forecasts["model"][0] == "ecmwf"
     
-    print("✅ Anti-leakage test (TIMESTAMPTZ) passed.")
+    print("✅ Anti-leakage test passed.")
 
 if __name__ == "__main__":
     tm = MoatManager("data/test_leakage.db")

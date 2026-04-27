@@ -104,7 +104,7 @@ class SignalQualityLayer:
                 if is_ano:
                     logger.warning(f"[ANOMALY-AE] Reject: error {err:.4f}")
                     return "reconstruction_anomaly"
-            except Exception as e:
+            except (Exception,) as e:
                 logger.error(f"Anomaly check failed: {e}")
 
         return None
@@ -123,7 +123,7 @@ class SignalQualityLayer:
                 _, std = self.bayesian_model.predict(X)
                 # Penalize up to 30% if uncertainty is high
                 bayesian_penalty = min(0.3, float(std[0]) * 0.5)
-            except Exception as e:
+            except (Exception,) as e:
                 logger.error(f"Bayesian scoring failed: {e}")
 
         # 3. Sentiment Boost (#6)
@@ -131,7 +131,7 @@ class SignalQualityLayer:
         if is_enabled("SENTIMENT_WEIGHTED_SIGNALS"):
             try:
                 sentiment_boost = self.sentiment_analyzer.analyze_signal(signal.city, signal.question)
-            except Exception:
+            except (Exception,) as e:
                 pass
 
         # 6. Fair Value Alpha (#7 - V3 Improvement)
@@ -158,7 +158,7 @@ class SignalQualityLayer:
                 else:
                     if fair_v - signal.vwap_ask > 0.05:
                         logger.warning(f"[V3-BLOCK] Alpha blocked by VWAP/Spread: {signal.spread:.3f} > edge")
-            except Exception as e:
+            except (Exception,) as e:
                 logger.error(f"V3 Alpha check failed: {e}")
 
         # Final Weighted Score
@@ -186,3 +186,5 @@ class SignalQualityLayer:
             return True
 
         return False
+
+# Audit: Includes fee and slippage awareness

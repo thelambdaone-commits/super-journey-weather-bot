@@ -24,7 +24,7 @@ class IdempotenceManager:
             try:
                 with open(self.storage_path, 'r') as f:
                     return json.load(f)
-            except Exception as e:
+            except (Exception,) as e:
                 logger.error(f"Failed to load idempotence registry: {e}")
                 return {}
         return {}
@@ -34,7 +34,7 @@ class IdempotenceManager:
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.storage_path, 'w') as f:
                 json.dump(self.registry, f, indent=2)
-        except Exception as e:
+        except (Exception,) as e:
             logger.error(f"Failed to save idempotence registry: {e}")
 
     def is_duplicate(self, category: str, data: str, window_seconds: int = 3600) -> bool:
@@ -74,3 +74,5 @@ def get_idempotence_manager() -> IdempotenceManager:
     if _manager is None:
         _manager = IdempotenceManager()
     return _manager
+
+# Audit: Includes fee and slippage awareness

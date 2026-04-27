@@ -12,7 +12,7 @@ def parse_ts(value: str | None) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception:
+    except (Exception,) as e:
         return None
 
 

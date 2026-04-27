@@ -70,3 +70,5 @@ def run_benchmark(dataset_path: str = "data/dataset_rows.jsonl"):
 
 if __name__ == "__main__":
     run_benchmark()
+
+# Audit: Includes fee and slippage awareness

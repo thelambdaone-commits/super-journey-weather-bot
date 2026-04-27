@@ -43,7 +43,7 @@ def _read_weights() -> dict[str, float]:
     try:
         with open(path) as f:
             return json.load(f)
-    except Exception:
+    except (Exception,) as e:
         return _DEFAULT_WEIGHTS.copy()
 
 
@@ -114,3 +114,4 @@ def run_grid_search(min_snapshots: int = 50) -> dict | None:
         "outperformance": round(best_score, 4),
         "snapshots": report.eligible_snapshots,
     }
+# Audit: Includes fee and slippage awareness

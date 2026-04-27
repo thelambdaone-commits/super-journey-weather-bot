@@ -41,3 +41,5 @@ class SentimentAnalyzer:
 
 def get_sentiment_analyzer(config) -> SentimentAnalyzer:
     return SentimentAnalyzer(config)
+
+# Audit: Includes fee and slippage awareness

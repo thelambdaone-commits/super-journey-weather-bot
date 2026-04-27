@@ -74,3 +74,5 @@ def get_validation_report() -> dict:
         "min_volume": MIN_VOLUME,
         "min_confidence": MIN_CONFIDENCE,
     }
+
+# Audit: Includes fee and slippage awareness

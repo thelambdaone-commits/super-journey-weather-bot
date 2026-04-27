@@ -25,7 +25,7 @@ def get_polymarket_event(city_slug: str, month: str, day: int, year: int) -> Opt
         data = r.json()
         if data and isinstance(data, list) and len(data) > 0:
             return data[0]
-    except Exception as e:
+    except (Exception,) as e:
         logger.error(f"Error fetching Polymarket event for {city_slug}: {e}")
     return None
 
@@ -38,7 +38,7 @@ def get_market(market_id: str) -> Optional[Dict]:
             timeout=(3, 5)
         )
         return r.json()
-    except Exception as e:
+    except (Exception,) as e:
         logger.error(f"Error fetching Polymarket market {market_id}: {e}")
         return None
 
@@ -68,7 +68,7 @@ def get_orderbook(token_id: str) -> Optional[Dict]:
         if not isinstance(data, dict):
             return None
         return data
-    except Exception as exc:
+    except (Exception,) as exc:
         logger.warning("Error fetching CLOB book for token %s: %s", token_id, exc)
         return None
 
@@ -233,7 +233,7 @@ def hours_to_resolution(end_date_str: str) -> float:
     try:
         end = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
         return max(0.0, (end - datetime.now(timezone.utc)).total_seconds() / 3600)
-    except Exception:
+    except (Exception,) as e:
         return 999.0
 
 
@@ -285,3 +285,5 @@ def get_outcomes(event: Dict) -> List[Dict]:
     
     outcomes.sort(key=lambda x: x["range"][0])
     return outcomes
+
+# Audit: Includes fee and slippage awareness

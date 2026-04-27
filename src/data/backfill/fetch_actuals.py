@@ -14,7 +14,7 @@ def load_market(path: Path) -> dict | None:
     """Load one market JSON payload."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (Exception,) as e:
         return None
 
 

@@ -46,7 +46,7 @@ class PipelineRunner:
             
         except subprocess.TimeoutExpired:
             return False, f"Timeout après {self.timeout}s"
-        except Exception as e:
+        except (Exception,) as e:
             return False, str(e)
 
     def _stable_data_hash(self) -> str:
@@ -96,7 +96,7 @@ class PipelineRunner:
             )
             success = (result.returncode == 0)
             output = result.stdout + result.stderr
-        except Exception as e:
+        except (Exception,) as e:
             success = False
             output = str(e)
 
@@ -121,7 +121,7 @@ class PipelineRunner:
                 data_hash=data_hash
             )
             results["registry"] = {"success": True, "version": version}
-        except Exception as e:
+        except (Exception,) as e:
             results["registry"] = {"success": False, "error": str(e)}
             return False, results
 

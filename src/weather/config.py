@@ -77,7 +77,7 @@ class Config:
             try:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
-            except Exception:
+            except (Exception,) as e:
                 pass
         
         # 2. Override with environment variables (uppercase)

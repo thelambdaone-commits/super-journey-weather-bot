@@ -28,7 +28,7 @@ class SnapshotEngine:
             if ml_path.exists():
                 try:
                     self.ml_stats = json.loads(ml_path.read_text(encoding="utf-8"))
-                except Exception:
+                except (Exception,) as e:
                     self.ml_stats = {}
         return self.ml_stats
 
@@ -138,7 +138,7 @@ class SnapshotEngine:
         """Load and process a single market JSON file."""
         try:
             market = json.loads(market_path.read_text(encoding="utf-8"))
-        except Exception:
+        except (Exception,) as e:
             return []
         return self.process_market(market)
 

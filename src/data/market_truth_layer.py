@@ -116,7 +116,7 @@ class PolymarketAPIClient:
                 data = response.json()
                 return data.get("markets", data if isinstance(data, list) else [])
 
-        except Exception:
+        except (Exception,) as e:
             pass
 
         return self._fetch_from_fallback(tags, limit, closed)
@@ -201,7 +201,7 @@ class PolymarketAPIClient:
                         "no_price": float(data.get("no", 0.5)),
                         "timestamp": int(datetime.now().timestamp()),
                     }
-            except Exception:
+            except (Exception,) as e:
                 continue
 
         return self._generate_mock_state(market_id)
@@ -361,7 +361,7 @@ class MarketTruthLayer:
             if match:
                 try:
                     return float(match.group(1))
-                except Exception:
+                except (Exception,) as e:
                     pass
         return None
 
@@ -423,7 +423,7 @@ class MarketTruthLayer:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 states.append(MarketState(**data))
-            except Exception:
+            except (Exception,) as e:
                 continue
 
             if limit and len(states) >= limit:

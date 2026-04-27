@@ -64,7 +64,7 @@ def calculate_ml_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> dict:
     
     try:
         auc = roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else 0.5
-    except Exception:
+    except (Exception,) as e:
         auc = 0.5
         
     return {

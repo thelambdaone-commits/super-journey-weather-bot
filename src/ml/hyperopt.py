@@ -228,7 +228,7 @@ def _compute_cv_score(
             pred = model.predict_proba(X_val)[:, 1]
             if len(np.unique(y_val)) > 1:
                 aucs.append(roc_auc_score(y_val, pred))
-        except Exception:
+        except (Exception,) as e:
             pass
     
     return np.mean(aucs) if aucs else 0.5
@@ -271,7 +271,7 @@ def _load_tuning_history(limit: int = 10) -> list[dict]:
         for line in f:
             try:
                 records.append(json.loads(line))
-            except Exception:
+            except (Exception,) as e:
                 pass
     
     return records[-limit:]
@@ -393,7 +393,7 @@ def run_tuning(
                 best_metrics = metrics.copy()
             
             n_evaluated += 1
-        except Exception:
+        except (Exception,) as e:
             continue
     
     final_model, final_metrics = _train_xgboost(

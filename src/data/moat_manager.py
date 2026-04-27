@@ -37,7 +37,7 @@ class MoatManager:
             self.conn = duckdb.connect(self.db_path)
             self._bootstrap()
             self.ready = True
-        except Exception:
+        except (Exception,) as e:
             logger.exception("CRITICAL: Failed to connect to DuckDB at %s", self.db_path)
             self.ready = False
             raise MoatConnectionError(f"Could not open database at {db_path}")
@@ -87,7 +87,7 @@ class MoatManager:
                     regime TEXT
                 )
             """)
-        except Exception:
+        except (Exception,) as e:
             logger.exception("Failed to bootstrap Moat schema")
             raise MoatWriteError("Schema initialization failed")
 
@@ -101,7 +101,7 @@ class MoatManager:
             # Note: Parameterized query for large data is handled via DuckDB's native polars integration
             self.conn.execute("INSERT INTO forecast_runs SELECT * FROM df")
             logger.info("[MOAT] Saved %d forecast points.", len(df))
-        except Exception:
+        except (Exception,) as e:
             logger.exception("Failed to bulk insert forecasts")
             raise MoatWriteError("Forecast insertion failed")
 
@@ -115,7 +115,7 @@ class MoatManager:
             self.conn.execute("""
                 INSERT INTO market_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (ts, market_id, city, bid, ask, vwap, mid, spread, liquidity, tick_size, 0.0))
-        except Exception:
+        except (Exception,) as e:
             logger.exception("Failed to save market quote for %s", city)
             raise MoatWriteError(f"Market quote persistence failed for {city}")
 
@@ -133,7 +133,7 @@ class MoatManager:
                 ORDER BY run_cycle DESC
             """
             return self.conn.execute(query, (city, target_time)).pl()
-        except Exception:
+        except (Exception,) as e:
             logger.exception("Failed to query valid forecasts for %s", city)
             raise MoatQueryError(f"Anti-leakage query failed for {city}")
 
@@ -148,7 +148,7 @@ class MoatManager:
                 ORDER BY event_ts DESC LIMIT ?
             """, (city, model, limit)).fetchone()
             return res[0] if res and res[0] is not None else 2.0
-        except Exception:
+        except (Exception,) as e:
             logger.exception("Failed to fetch calibration error for %s", city)
             return 2.0
 

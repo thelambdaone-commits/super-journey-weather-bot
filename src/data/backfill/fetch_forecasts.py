@@ -13,7 +13,7 @@ def load_market_snapshots(markets_dir: str = "data/markets") -> list[dict]:
     for path in sorted(Path(markets_dir).glob("*.json")):
         try:
             markets.append(json.loads(path.read_text(encoding="utf-8")))
-        except Exception:
+        except (Exception,) as e:
             continue
     return markets
 

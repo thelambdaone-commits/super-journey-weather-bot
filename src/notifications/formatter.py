@@ -1,81 +1,41 @@
 """
-Signal message formatting for Telegram and other notification channels.
+Notification Formatter - Bridge to Premium V2 Telegram Templates.
 """
 from __future__ import annotations
+from . import telegram_control_center as tg
 
-def _format_percent(value: float | None, digits: int = 1) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value:.{digits}%}"
+def format_signal_for_telegram(signal_dict: dict) -> bool:
+    """
+    Bridge from scanner/engine to the Premium Signal template.
+    """
+    try:
+        tg.send_signal(
+            city=signal_dict.get("city", "Unknown"),
+            market=f"{'ABOVE' if signal_dict.get('side') == 'ABOVE' else 'BELOW'} {signal_dict.get('threshold')}°C",
+            fair_value=signal_dict.get("p", 0.5),
+            market_odds=signal_dict.get("entry_price", 0.5),
+            edge=signal_dict.get("ev", 0.0),
+            confidence=signal_dict.get("ml", {}).get("tier", "LOW"),
+            size_pct=signal_dict.get("kelly", 0.0) * 100,
+            reason=signal_dict.get("reasons", None)
+        )
+        return True
+    except Exception:
+        return False
 
-def _format_temp(value: float | None, unit: str | None) -> str:
-    if value is None:
-        return "n/a"
-    suffix = unit or ""
-    return f"{value:.1f}{suffix}"
+def format_daily_recap(stats: dict) -> bool:
+    """Bridge to Daily Recap."""
+    return tg.send_daily_report(stats)
 
-def _format_money(value: float | None) -> str:
-    if value is None:
-        return "n/a"
-    return f"${value:.2f}"
+def format_weekly_recap(stats: dict) -> bool:
+    """Bridge to Weekly Recap."""
+    return tg.send_weekly_report(stats)
 
-def _format_reason_lines(reason_lines: list[str]) -> str:
-    if not reason_lines:
-        return "→ Aucun raisonnement disponible"
-    return "\n".join(f"→ {line}" for line in reason_lines[:3])
-
-def format_weather_signal(payload: dict) -> str:
-    """Render a premium, trade-ready weather signal message in French with Markdown."""
-    ml = payload.get("ml", {})
-    confidence_pct = _format_percent(ml.get("confidence", payload.get("confidence")), 2)
-    score = payload.get("signal_score")
-    score_text = "n/a" if score is None else f"{score:.2f}"
-    rank = payload.get("rank")
-    rank_text = "n/a" if rank is None else f"#{int(rank)}"
-    link = payload.get("trade_url") or f"https://polymarket.com/event/will-it-be-above-{payload.get('city', 'weather')}-on-{payload.get('date', 'today')}"
-    
-    # Top 1% Audit Insights
-    uncertainty = ml.get("bayesian_uncertainty")
-    anomaly = ml.get("anomaly_error")
-    sentiment = ml.get("sentiment_boost")
-    portfolio = ml.get("portfolio_notes")
-    
-    audit_lines = []
-    if uncertainty is not None:
-        audit_lines.append(f"🧬 Incertitude Bayésienne: `{uncertainty:.3f}`")
-    if anomaly is not None:
-        audit_lines.append(f"🔍 Erreur Reconstruction (AE): `{anomaly:.3f}`")
-    if sentiment and sentiment > 0:
-        audit_lines.append(f"🔥 Sentiment Alerte: `+{sentiment*100:.0f}%`")
-    if portfolio:
-        audit_lines.append(f"💼 Note Portefeuille: _{portfolio}_")
-
-    audit_section = "\n".join(audit_lines) if audit_lines else "✅ Audit Engine: *OK*"
-
-    return (
-        f"{payload.get('emoji', '🌡️')} *SIGNAL MÉTÉO PREMIUM*\n\n"
-        f"📍 *Ville:* {payload.get('city', 'n/a').upper()}\n"
-        f"📅 *Horizon:* {payload.get('horizon', 'n/a')}\n"
-        f"🏦 *Marché:* {payload.get('market_name', 'n/a')}\n\n"
-        f"──────────────\n"
-        f"🌡️ *Prévisions (ML calibré)*\n"
-        f"→ `{_format_temp(payload.get('forecast_temp'), payload.get('unit'))}`"
-        f" (±{_format_temp(payload.get('sigma', ml.get('sigma')), payload.get('unit'))})\n"
-        f"→ Source: *{(payload.get('forecast_source') or 'n/a').upper()}*\n\n"
-        f"📊 *Analyse Probabiliste*\n"
-        f"→ Modèle: *{_format_percent(payload.get('calibrated_prob'), 2)}*\n"
-        f"→ Marché: *{_format_percent(payload.get('market_prob'), 2)}*\n"
-        f"→ Edge (ROI): *{_format_percent(payload.get('edge'), 2)}*\n\n"
-        f"🛡️ *Audit Engine v2.5.2*\n"
-        f"{audit_section}\n\n"
-        f"⚡ *Score & Classement*\n"
-        f"→ Signal Score: `{score_text}/1.0`\n"
-        f"→ Rang Global: `{rank_text}`\n"
-        f"→ Confiance: `{confidence_pct}`\n\n"
-        f"💰 *Exécution Recommandée*\n"
-        f"→ Action: `{payload.get('action', 'ACHETER OUI')}`\n"
-        f"→ Mise: *{_format_money(payload.get('size'))}* (Kelly fractionné)\n\n"
-        f"🔗 *Accès Direct*\n"
-        f"→ [Ouvrir sur Polymarket]({link})\n\n"
-        f"🚨 *Statut:* {payload.get('status', 'OPPORTUNITÉ')}"
+def format_trust_update(trade_result: dict) -> bool:
+    """Bridge to Trust Update."""
+    return tg.send_trust_update(
+        city=trade_result.get("city", "Unknown"),
+        market=trade_result.get("market", "Unknown"),
+        result=trade_result.get("result", "LOST"),
+        pnl=trade_result.get("pnl_pct", 0.0)
     )

@@ -9,6 +9,7 @@ import sys
 import logging
 import os
 from datetime import datetime, timezone
+from src.notifications.telegram_control_center import crash_alert
 
 import backfill as backfill_cli
 from src.ai.diagnostics import format_ai_diagnostics, run_ai_diagnostics
@@ -303,7 +304,7 @@ def print_audit():
         for line in format_ranking_report(report):
             print(line)
             report_text += line + "\n"
-    except Exception as e:
+    except (Exception,) as e:
         print(f"Backtest failed or insufficient data: {e}")
         report_text += f"Backtest failed: {e}\n"
 
@@ -372,7 +373,7 @@ def print_audit():
     save_audit_artifact(report_text)
 
 
-if __name__ == "__main__":
+def main():
     # Setup basic logging
     logging.basicConfig(
         level=logging.INFO,
@@ -629,5 +630,11 @@ if __name__ == "__main__":
                 if notifier.delete_message(i):
                     count += 1
             print(f"✅ Terminé: {count} messages supprimés.")
-    else:
-        print("Usage: python bot.py [run|status|report|paper-report|audit|resolve|poll|auto-resolve|errors|live-edge|retrain-check|gem-check|test|train|tune|data-qa|backfill|calibrate|ai-status|ranking-backtest|walk-forward|purge] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")
+if __name__ == "__main__":
+    try:
+        main()
+    except (KeyboardInterrupt, SystemExit):
+        sys.exit(0)
+    except Exception as e:
+        crash_alert(e)
+        raise

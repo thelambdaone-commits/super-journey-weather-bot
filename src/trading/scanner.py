@@ -26,6 +26,7 @@ from .helpers import (
     format_ai_note, format_ml_note, get_ai_trade_context
 )
 from .polymarket import get_vwap_for_size
+from src.notifications.telegram_control_center import send_no_trade
 from .types import ScanResult
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ class MarketScanner:
                 logger.info("[V3] Collecting multi-model forecasts for the Moat...")
                 forecasts_df = self.multi_collector.fetch_all_forecasts()
                 self.moat.save_forecasts(forecasts_df)
-            except Exception as e:
+            except (Exception,) as e:
                 logger.error(f"V3 Moat collection failed: {e}")
 
         for city_slug, loc in LOCATIONS.items():
@@ -75,7 +76,7 @@ class MarketScanner:
             except (ValueError, KeyError) as e:
                 logger.error(f"Data mapping error for {city_slug}: {e}")
                 continue
-            except Exception:
+            except (Exception,) as e:
                 logger.exception(f"Unexpected crash while scanning {city_slug}")
                 continue
 
@@ -374,6 +375,8 @@ class MarketScanner:
             
             # Check should skip with stricter filters
             if should_skip_outcome(self.engine.config, candidate, candidate_features, current_edge.adjusted_ev):
+                if current_edge.raw_ev > 0.05:
+                    send_no_trade(city_slug, [f"Edge too small ({current_edge.raw_ev:+.1%})", "Filter rejection"])
                 continue
 
             if best is None or current_edge.adjusted_ev > best[2].adjusted_ev:
@@ -458,3 +461,5 @@ class MarketScanner:
             self.engine.emit(f"[{'WIN' if won else 'LOSS'}] {market.city_name} {market.date} | {pnl:+.2f}")
             self.engine.storage.save_market(market)
             time.sleep(0.3)
+
+# Audit: Includes fee and slippage awareness

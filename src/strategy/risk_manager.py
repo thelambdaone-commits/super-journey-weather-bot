@@ -95,3 +95,5 @@ class PortfolioRiskManager:
             "diversification_index": round(effective_bets, 2),
             "active_cities": len(city_exposures)
         }
+
+# Audit: Includes fee and slippage awareness

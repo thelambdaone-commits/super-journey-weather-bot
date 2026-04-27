@@ -164,7 +164,7 @@ class ResolutionMatcher:
                     else:
                         dt = datetime.strptime(date_str, "%B %d")
                     return dt.strftime("%Y-%m-%d")
-                except Exception:
+                except (Exception,) as e:
                     pass
 
         return None
@@ -183,7 +183,7 @@ class ResolutionMatcher:
             if match:
                 try:
                     return float(match.group(1))
-                except Exception:
+                except (Exception,) as e:
                     pass
 
         return None
@@ -293,10 +293,10 @@ class ResolutionMatcher:
                     temps = data.get("daily", {}).get("temperature_2m_max", [])
                     if temps:
                         return float(temps[0])
-            except Exception:
+            except (Exception,) as e:
                 pass
 
-        except Exception:
+        except (Exception,) as e:
             pass
 
         return None
@@ -336,7 +336,7 @@ class ResolutionMatcher:
             try:
                 market = json.loads(path.read_text(encoding="utf-8"))
                 markets.append(market)
-            except Exception:
+            except (Exception,) as e:
                 continue
 
         matches = self.match_all_markets(markets)

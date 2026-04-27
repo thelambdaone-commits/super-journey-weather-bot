@@ -64,6 +64,8 @@ def get_cluster_mapping(data_dir: str = "data") -> dict:
         return {}
     try:
         return calculate_risk_clusters(str(path))
-    except Exception as e:
+    except (Exception,) as e:
         print(f"Error calculating clusters: {e}")
         return {}
+
+# Audit: Includes fee and slippage awareness

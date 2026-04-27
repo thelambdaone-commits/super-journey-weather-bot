@@ -215,7 +215,7 @@ class PolymarketHarvester:
 
                     time.sleep(self.config.rate_limit_seconds)
 
-                except Exception as e:
+                except (Exception,) as e:
                     errors.append(f"{market_id}: {str(e)}")
 
             duration = (datetime.now() - start_time).total_seconds()
@@ -232,7 +232,7 @@ class PolymarketHarvester:
                 success=True,
             )
 
-        except Exception as e:
+        except (Exception,) as e:
             return HarvestReport(
                 markets_collected=0,
                 markets_with_price_history=0,
@@ -268,7 +268,7 @@ class PolymarketHarvester:
             try:
                 market = json.loads(path.read_text(encoding="utf-8"))
                 markets.append(market)
-            except Exception:
+            except (Exception,) as e:
                 continue
 
         return markets
@@ -304,7 +304,7 @@ class _PolymarketAPI:
             )
             if response.status_code == 200:
                 return response.json().get("markets", [])
-        except Exception:
+        except (Exception,) as e:
             pass
 
         return []
@@ -323,7 +323,7 @@ class _PolymarketAPI:
             )
             if response.status_code == 200:
                 return response.json()
-        except Exception:
+        except (Exception,) as e:
             pass
 
         return {}
@@ -342,7 +342,7 @@ class _PolymarketAPI:
             )
             if response.status_code == 200:
                 return response.json().get("history", [])
-        except Exception:
+        except (Exception,) as e:
             pass
 
         return []

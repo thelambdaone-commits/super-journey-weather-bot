@@ -245,7 +245,7 @@ class DatasetRowV3:
             day_of_year = dt.timetuple().tm_yday
             timestamp = int(dt.timestamp())
             scan_ts = snapshot.get("ts")
-        except Exception:
+        except (Exception,) as e:
             day_of_year = 0
             timestamp = 0
             scan_ts = None

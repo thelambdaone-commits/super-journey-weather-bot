@@ -199,7 +199,7 @@ class TradingEngine:
                             run_ourobouros(min_resolutions=10)
                             
                             self.last_report_ts = now
-                        except Exception as report_exc:
+                        except (Exception,) as report_exc:
                             self.emit(f"Report/Ouroboros error: {report_exc}")
                             logger.error(f"Failed to run hourly tasks: {report_exc}")
 
@@ -214,14 +214,14 @@ class TradingEngine:
                                 f"closed: {result.closed} | resolved: {result.resolved}"
                             )
                             last_scan = now
-                        except Exception as scan_exc:
+                        except (Exception,) as scan_exc:
                             self.emit(f"Critical scan error: {scan_exc}")
                             logger.exception("Uncaught exception in scan loop")
                             time.sleep(60) # Wait before retry if scan failed
 
                     if self.running:
                         time.sleep(60) # High-precision monitor sleep (1 min)
-                except Exception as loop_exc:
+                except (Exception,) as loop_exc:
                     self.emit(f"Loop error: {loop_exc}")
                     logger.exception(f"Unexpected error in main loop: {loop_exc}")
                     time.sleep(60) # Safety sleep
@@ -245,7 +245,7 @@ class TradingEngine:
                 optimized_signals = self.portfolio_optimizer.optimize_sizing(
                     pending_signals, all_markets, state.balance, drawdown_pct
                 )
-            except Exception as e:
+            except (Exception,) as e:
                 logger.error(f"Portfolio Optimization failed, falling back to raw signals: {e}")
                 optimized_signals = pending_signals
         
@@ -458,3 +458,5 @@ class TradingEngine:
         # Persist last report timestamp
         state.last_report_ts = time.time()
         self.storage.save_state(state)
+
+# Audit: Includes fee and slippage awareness

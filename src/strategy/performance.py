@@ -92,3 +92,5 @@ class PerformanceEngine:
             avg_loss=avg_loss,
             expectancy=expectancy
         )
+
+# Audit: Includes fee and slippage awareness

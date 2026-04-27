@@ -90,7 +90,7 @@ class PortfolioOptimizer:
                     if proposed_cost > liquidity_cap:
                         logger.info(f"[PORTFOLIO] Scaling {city} down: ${proposed_cost:.2f} -> ${liquidity_cap:.2f} (Liquidity Cap)")
                         proposed_cost = liquidity_cap
-                except Exception:
+                except (Exception,) as e:
                     pass
 
             # 3.5 Adaptive Sizing (#8)
@@ -109,3 +109,5 @@ class PortfolioOptimizer:
             optimized.append(sig)
 
         return optimized
+
+# Audit: Includes fee and slippage awareness

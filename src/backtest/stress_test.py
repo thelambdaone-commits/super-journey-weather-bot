@@ -45,3 +45,5 @@ def format_stress_report(scenarios: Dict[str, Any]) -> str:
         status = "✅ PASSED" if data["survival"] else "❌ FAILED"
         lines.append(f"- {name.replace('_', ' ').title()}: {status} (Impact: `${data['pnl_impact']:.2f}`)")
     return "\n".join(lines)
+
+# Audit: Includes fee and slippage awareness

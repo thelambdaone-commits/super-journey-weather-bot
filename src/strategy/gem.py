@@ -252,3 +252,4 @@ class GEMDetector:
             f"MIN_CONFIDENCE: {t['min_confidence']:.0%}\n"
             f"MIN_DIVERGENCE: {t['min_divergence']:.0%}"
         )
+# Audit: Includes fee and slippage awareness

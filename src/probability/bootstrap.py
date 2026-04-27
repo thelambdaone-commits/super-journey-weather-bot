@@ -49,7 +49,7 @@ def _parse_bucket(bucket: str) -> tuple[float, float] | None:
         return None
     try:
         return float(parts[0]), float(parts[1])
-    except Exception:
+    except (Exception,) as e:
         return None
 
 

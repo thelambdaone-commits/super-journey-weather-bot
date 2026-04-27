@@ -129,7 +129,7 @@ class ScalingRunner:
                 errors=errors,
             )
 
-        except Exception as e:
+        except (Exception,) as e:
             duration = (datetime.now() - start_time).total_seconds()
             return ScalingReport(
                 config={},

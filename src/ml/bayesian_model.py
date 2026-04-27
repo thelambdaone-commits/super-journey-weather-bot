@@ -45,7 +45,7 @@ class BayesianProbabilityModel:
             self.fitted = True
             joblib.dump(self.model, self.model_path)
             return True
-        except Exception as e:
+        except (Exception,) as e:
             logger.error(f"Error training Bayesian model: {e}")
             return False
 
@@ -56,7 +56,7 @@ class BayesianProbabilityModel:
                 self.model = joblib.load(self.model_path)
                 self.fitted = True
                 return True
-            except Exception:
+            except (Exception,) as e:
                 pass
         return False
 

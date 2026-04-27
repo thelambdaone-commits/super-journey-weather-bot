@@ -53,7 +53,7 @@ class AnomalyAutoencoder:
             
             joblib.dump({"model": self.model, "scaler": self.scaler, "threshold": self.threshold}, self.model_path)
             return True
-        except Exception as e:
+        except (Exception,) as e:
             logger.error(f"Error training Autoencoder: {e}")
             return False
 
@@ -67,7 +67,7 @@ class AnomalyAutoencoder:
                 self.threshold = data["threshold"]
                 self.fitted = True
                 return True
-            except Exception:
+            except (Exception,) as e:
                 pass
         return False
 
@@ -81,7 +81,7 @@ class AnomalyAutoencoder:
             reconstructed = self.model.predict(X_scaled)
             error = float(np.mean(np.square(X_scaled - reconstructed)))
             return error > self.threshold, error
-        except Exception:
+        except (Exception,) as e:
             return False, 0.0
 
 def get_anomaly_detector(data_dir: str = "data") -> AnomalyAutoencoder:

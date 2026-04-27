@@ -40,7 +40,7 @@ class FairValueEngine:
             fair_value = prob_above if side.upper() == "ABOVE" else (1.0 - prob_above)
             return round(float(fair_value), 4)
             
-        except Exception as e:
+        except (Exception,) as e:
             if isinstance(e, FairValueError):
                 raise
             logger.exception("Fair Value calculation crashed for %s", city)
@@ -54,7 +54,7 @@ class FairValueEngine:
                 logger.warning("[GATE] %s blocked: High MAE %.2f needs >15%% edge", city, recent_mae)
                 return False
             return True
-        except Exception:
+        except (Exception,) as e:
             logger.exception("Calibration gate failed for %s", city)
             return False # Conservative: block if check fails
 

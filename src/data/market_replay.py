@@ -170,7 +170,7 @@ class MarketReplayEngine:
             if ml_path.exists():
                 try:
                     self.ml_stats = json.loads(ml_path.read_text(encoding="utf-8"))
-                except Exception:
+                except (Exception,) as e:
                     pass
 
     def replay_market(
@@ -205,14 +205,14 @@ class MarketReplayEngine:
         created_str = market.get("created_at", datetime.now().isoformat())
         try:
             discovery_ts = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-        except Exception:
+        except (Exception,) as e:
             discovery_ts = datetime.now()
 
         event_end_str = market.get("event_end_date")
         if event_end_str:
             try:
                 resolution_ts = datetime.fromisoformat(event_end_str.replace("Z", "+00:00"))
-            except Exception:
+            except (Exception,) as e:
                 resolution_ts = discovery_ts + timedelta(hours=24)
         else:
             resolution_ts = discovery_ts + timedelta(hours=24)
@@ -327,7 +327,7 @@ class MarketReplayEngine:
                     replay["unit"] = unit
                     replay["actual_temp"] = actual_temp
                     all_replays.append(replay)
-            except Exception:
+            except (Exception,) as e:
                 continue
 
         return all_replays

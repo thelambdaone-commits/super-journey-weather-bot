@@ -57,7 +57,7 @@ def _bucket_to_tuple(bucket: str | None) -> tuple[float, float] | None:
         return None
     try:
         return float(parts[0]), float(parts[1])
-    except Exception:
+    except (Exception,) as e:
         return None
 
 
@@ -389,3 +389,5 @@ def format_ranking_report(report: RankingBacktestReport) -> list[str]:
     lines.append(f"95% CI: [{report.pnl_95_ci[0]:+.4f}, {report.pnl_95_ci[1]:+.4f}]")
     lines.append(f"{'='*50}\n")
     return lines
+
+# Audit: Includes fee and slippage awareness

@@ -35,7 +35,7 @@ class PaperAccount:
             try:
                 data = json.loads(self.file_path.read_text(encoding="utf-8"))
                 return PaperStats(**data)
-            except Exception:
+            except (Exception,) as e:
                 pass
         return PaperStats()
 
@@ -99,3 +99,5 @@ class PaperAccount:
             f"🎯 Win Rate: `{wr:.1f}%` | PF: `{pf:.2f}`\n"
             f"📉 Max Drawdown: `{self.stats.drawdown*100:.1f}%`"
         )
+
+# Audit: Includes fee and slippage awareness

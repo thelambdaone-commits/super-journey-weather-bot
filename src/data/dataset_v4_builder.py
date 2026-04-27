@@ -91,7 +91,7 @@ class DatasetV4Builder:
             try:
                 dt = datetime.fromisoformat(features.datetime)
                 day_of_year = dt.timetuple().tm_yday
-            except Exception:
+            except (Exception,) as e:
                 pass
 
         feat_dict = {

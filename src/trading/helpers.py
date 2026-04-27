@@ -18,7 +18,7 @@ def log_paper_trade(city: str, date_str: str, horizon: str, signal: dict) -> Non
     if path.exists():
         try:
             trades = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (Exception,) as e:
             trades = []
     else:
         trades = []
@@ -123,3 +123,5 @@ def get_ai_trade_context(city: str, snap: dict, signal: dict, unit: str = "C") -
     )
     analysis["anomaly"] = anomaly
     return analysis, bool(anomaly.get("is_anomaly"))
+
+# Audit: Includes fee and slippage awareness

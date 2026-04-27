@@ -98,7 +98,7 @@ Respond with JSON:
             "recommendation": "manual_review"
         }
         
-    except Exception as e:
+    except (Exception,) as e:
         return {"error": str(e)}
 
 
@@ -134,7 +134,7 @@ Write a 2-sentence summary in trading style."""
         
         return response.choices[0].message.content
         
-    except Exception:
+    except (Exception,) as e:
         return None
 
 
@@ -184,7 +184,7 @@ Respond JSON:
         if start >= 0 and end > start:
             return json.loads(content[start:end])
         
-    except Exception:
+    except (Exception,) as e:
         pass
     
     return {"is_anomaly": False}

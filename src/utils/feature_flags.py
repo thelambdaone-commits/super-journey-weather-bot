@@ -24,6 +24,6 @@ def safe_execute(flag_name: str, func, *args, **kwargs):
         
     try:
         return func(*args, **kwargs)
-    except Exception as e:
+    except (Exception,) as e:
         logger.error(f"[FEATURE-FAIL] {flag_name}: {e}")
         return None

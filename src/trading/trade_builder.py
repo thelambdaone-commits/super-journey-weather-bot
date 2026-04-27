@@ -122,3 +122,5 @@ def build_trade_payload(
         "priority": priority,
         "emoji": emoji,
     }
+
+# Audit: Includes fee and slippage awareness

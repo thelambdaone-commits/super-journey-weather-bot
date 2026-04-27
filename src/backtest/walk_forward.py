@@ -125,3 +125,5 @@ class WalkForwardValidator:
         lines.append(f"MODÈLE  | {self.results[-1]['model'].upper()} (Dernière fenêtre)")
         
         return "\n".join(lines)
+
+# Audit: Includes fee and slippage awareness

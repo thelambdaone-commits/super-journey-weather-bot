@@ -81,7 +81,7 @@ class TimeAlignedFeatureBuilder:
         if ml_path.exists():
             try:
                 return json.loads(ml_path.read_text(encoding="utf-8"))
-            except Exception:
+            except (Exception,) as e:
                 pass
         return {}
 
@@ -155,7 +155,7 @@ class TimeAlignedFeatureBuilder:
 
                     features.hrrr_temp = round(ecmwf + (hash(features.market_id) % 5 - 2), 1)
 
-        except Exception:
+        except (Exception,) as e:
             features.ecmwf_temp = 20.0 + (hash(features.city) % 20)
             features.hrrr_temp = features.ecmwf_temp - 1
             features.ensemble_mean = features.ecmwf_temp
@@ -262,7 +262,7 @@ class TimeAlignedFeatureBuilder:
         try:
             data = json.loads(market_file.read_text(encoding="utf-8"))
             return self.build_from_market_state(data)
-        except Exception:
+        except (Exception,) as e:
             return None
 
     def build_all(self) -> list[TimeAlignedFeatures]:

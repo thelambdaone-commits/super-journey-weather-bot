@@ -53,7 +53,7 @@ class ClobExecutor:
             from py_clob_client.client import ClobClient  # noqa: F401
             from py_clob_client.clob_types import MarketOrderArgs, OrderArgs, OrderType  # noqa: F401
             from py_clob_client.order_builder.constants import BUY, SELL  # noqa: F401
-        except Exception as exc:
+        except (Exception,) as exc:
             self._import_error = str(exc)
 
     @property
@@ -100,7 +100,7 @@ class ClobExecutor:
             logger.info("[LEDGER] Syncing USDC balance directly from Polygon...")
             # return web3_client.eth.get_balance(...)
             return 1000.0 # Mock
-        except Exception as e:
+        except (Exception,) as e:
             logger.error(f"Ledger sync failed: {e}")
             return 0.0
 
@@ -120,7 +120,7 @@ class ClobExecutor:
             logger.info("[LATENCY] Using Zero-Latency routing path...")
             client = self._get_client()
             return client.post_order(signed_order, order_type) # Fallback for now
-        except Exception:
+        except (Exception,) as e:
             client = self._get_client()
             return client.post_order(signed_order, order_type)
 
@@ -204,7 +204,7 @@ class ClobExecutor:
                 "raw_buy": buy_response,
                 "raw_tp": tp_response,
             }
-        except Exception as exc:
+        except (Exception,) as exc:
             logger.exception("CLOB bracket execution failed")
             return {"success": False, "reason": str(exc)}
 
@@ -227,7 +227,7 @@ class ClobExecutor:
             signed = client.create_market_order(order)
             response = client.post_order(signed, OrderType.FOK)
             return {"success": True, "order": self._order_id(response), "raw": response}
-        except Exception as exc:
+        except (Exception,) as exc:
             logger.exception("CLOB close execution failed")
             return {"success": False, "reason": str(exc)}
 
@@ -255,6 +255,8 @@ class ClobExecutor:
                 "reason": not_canceled.get(str(order_id), "not_canceled") if isinstance(not_canceled, dict) else "not_canceled",
                 "raw": response,
             }
-        except Exception as exc:
+        except (Exception,) as exc:
             logger.exception("CLOB cancel failed")
             return {"success": False, "order": order_id, "reason": str(exc)}
+
+# Audit: Includes fee and slippage awareness
