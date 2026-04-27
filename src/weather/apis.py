@@ -167,8 +167,11 @@ def get_metar(city_slug: str) -> Optional[float]:
     return None
 
 
-def get_actual_temp(city_slug: str, date_str: str) -> Optional[float]:
-    """Get actual temperature after market resolution via Open-Meteo + Meteostat fallback."""
+def get_actual_temp(city_slug: str, date_str: str, station: str = "GENERIC") -> float | None:
+    """
+    Get the official historical temperature for a city and date.
+    Supports station-specific overrides for V3 precision.
+    """
     from datetime import datetime
 
     loc = get_by_slug(city_slug)

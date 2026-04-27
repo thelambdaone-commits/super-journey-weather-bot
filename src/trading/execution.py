@@ -27,6 +27,14 @@ class ExecutionConfig:
     funder: str | None
     signature_type: int
 
+class TickSizeGuard:
+    """PR #3: Tick-Size Validation."""
+    @staticmethod
+    def round_to_tick(price: float, tick_size: float = 0.001) -> float:
+        if tick_size <= 0:
+            return round(price, 3)
+        return round(round(price / tick_size) * tick_size, 8)
+
 
 class ClobExecutor:
     """Small adapter around the official Polymarket CLOB client."""
@@ -163,11 +171,13 @@ class ClobExecutor:
             from py_clob_client.clob_types import MarketOrderArgs, OrderArgs, OrderType
             from py_clob_client.order_builder.constants import BUY, SELL
 
-            price = self._round_price(price)
+            # Apply Tick-Size Guard
+            tick_size = 0.01 # Default, should be fetched from market
+            price = TickSizeGuard.round_to_tick(price, tick_size)
             size = self._round_size(size)
             cost = round(price * size, 4)
-            tp_price = self._round_price(price + tp_offset)
-            stop_price = self._round_price(price - sl_offset)
+            tp_price = TickSizeGuard.round_to_tick(price + tp_offset, tick_size)
+            stop_price = TickSizeGuard.round_to_tick(price - sl_offset, tick_size)
 
             market_order = MarketOrderArgs(
                 token_id=str(token_id),

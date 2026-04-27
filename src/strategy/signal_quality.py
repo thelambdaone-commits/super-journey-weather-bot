@@ -14,6 +14,7 @@ from ..utils.feature_flags import is_enabled
 from ..ml.bayesian_model import get_bayesian_model
 from ..ml.anomaly_detector import get_anomaly_detector
 from .sentiment import get_sentiment_analyzer
+from ..alpha.fair_value import get_fair_value_engine
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ class Signal:
     calibration: float
     market_stability: float
     timestamp: float
+    best_ask: float = 0.5
+    vwap_ask: float = 0.5
+    spread: float = 0.05
     question: str = ""
     features: Optional[dict] = None
 
@@ -55,6 +59,9 @@ class Signal:
             calibration=calibration,
             market_stability=market_stability,
             timestamp=time.time(),
+            best_ask=float(signal_dict.get("best_ask", signal_dict.get("entry_price", 0.5))),
+            vwap_ask=float(signal_dict.get("vwap_ask", signal_dict.get("best_ask", 0.5))),
+            spread=float(signal_dict.get("spread", 0.05)),
             question=signal_dict.get("question", ""),
             features=signal_dict.get("features")
         )
@@ -69,6 +76,7 @@ class SignalQualityLayer:
         self.bayesian_model = get_bayesian_model(data_dir)
         self.anomaly_detector = get_anomaly_detector(data_dir)
         self.sentiment_analyzer = get_sentiment_analyzer(config)
+        self.fair_value_engine = get_fair_value_engine()
 
         # Thresholds
         self.MIN_CONFIDENCE = getattr(config, "signal_min_confidence", 0.70)
@@ -126,13 +134,41 @@ class SignalQualityLayer:
             except Exception:
                 pass
 
+        # 6. Fair Value Alpha (#7 - V3 Improvement)
+        alpha_bonus = 0.0
+        if is_enabled("V3_FAIR_VALUE"):
+            try:
+                # Target time is the resolution date (simplified to current date + horizon)
+                # In real code we'd use the actual market resolution date
+                from datetime import datetime, timedelta, timezone
+                target_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                
+                fair_v = self.fair_value_engine.calculate_fair_value(signal.city, signal.price, target_dt) 
+                
+                # PR #4: Calibration Gate
+                if not self.fair_value_engine.check_calibration_gate(signal.city, "ensemble", fair_v - signal.vwap_ask):
+                    return "calibration_gate_blocked"
+
+                # Use VWAP edge (against average execution price)
+                exec_edge = self.fair_value_engine.get_vwap_edge(fair_v, signal.vwap_ask, signal.spread)
+                
+                if exec_edge > 0.05:
+                    alpha_bonus = min(0.15, exec_edge * 0.5)
+                    logger.info(f"[V3-ALPHA] Found VWAP mispricing for {signal.city}: {exec_edge:.2%}")
+                else:
+                    if fair_v - signal.vwap_ask > 0.05:
+                        logger.warning(f"[V3-BLOCK] Alpha blocked by VWAP/Spread: {signal.spread:.3f} > edge")
+            except Exception as e:
+                logger.error(f"V3 Alpha check failed: {e}")
+
         # Final Weighted Score
         score = (
             0.4 * signal.confidence +
             0.3 * signal.edge +
             0.2 * signal.calibration +
             0.1 * signal.market_stability +
-            0.2 * sentiment_boost -
+            0.2 * sentiment_boost +
+            alpha_bonus -
             bayesian_penalty
         )
         return round(max(0.0, min(1.0, score)), 4)

@@ -6,6 +6,8 @@ import time
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from ..utils.feature_flags import is_enabled
+from ..settlement.station_map import get_station_info
 from ..weather.locations import LOCATIONS
 from .polymarket import check_market_resolved
 
@@ -24,7 +26,12 @@ class MarketResolver:
         if cache_key in self._last_poll_cache:
             return self._last_poll_cache[cache_key]
         
-        actual = get_actual_temp(city_slug, date_str)
+        station = "GENERIC"
+        if is_enabled("V3_STATION_PRECISION"):
+            station_info = get_station_info(city_slug)
+            station = station_info["code"]
+        
+        actual = get_actual_temp(city_slug, date_str, station=station)
         if actual is not None:
             self._last_poll_cache[cache_key] = actual
         return actual

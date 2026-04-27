@@ -73,7 +73,50 @@ def get_orderbook(token_id: str) -> Optional[Dict]:
         return None
 
 
-def refresh_outcome_orderbook(outcome: Dict) -> bool:
+def get_vwap_for_size(orderbook: dict, target_usd: float, side: str = "ask") -> float:
+    """
+    Calculate the Volume-Weighted Average Price (VWAP) for a target USD size.
+    side: 'ask' for buying, 'bid' for selling.
+    """
+    levels = orderbook.get("asks" if side == "ask" else "bids", [])
+    if not levels:
+        return 0.5
+        
+    accum_cost = 0.0
+    accum_shares = 0.0
+    remaining_usd = target_usd
+    
+    for price_str, size_str in levels:
+        price = float(price_str)
+        size_shares = float(size_str)
+        level_usd = price * size_shares
+        
+        if remaining_usd <= level_usd:
+            # We fill the remainder in this level
+            fill_shares = remaining_usd / price
+            accum_shares += fill_shares
+            accum_cost += remaining_usd
+            remaining_usd = 0
+            break
+        else:
+            # We take the whole level
+            accum_shares += size_shares
+            accum_cost += level_usd
+            remaining_usd -= level_usd
+            
+    if accum_shares == 0:
+        return float(levels[0][0]) if levels else 0.5
+        
+    # Return average price per share
+    vwap = accum_cost / accum_shares
+    
+    # If we couldn't fill the whole size, we add a penalty
+    if remaining_usd > 0:
+        vwap *= 1.1 
+        
+    return round(vwap, 4)
+
+def refresh_outcome_orderbook(event_id: str, outcome_name: str) -> dict:
     """
     Replace indicative Gamma prices with executable CLOB bid/ask.
 

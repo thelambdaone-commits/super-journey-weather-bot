@@ -3,6 +3,7 @@ Market scanning and processing logic.
 """
 from __future__ import annotations
 import time
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, List
 
@@ -24,18 +25,28 @@ from .helpers import (
     log_paper_trade, build_signal_marker, should_emit_marker,
     format_ai_note, format_ml_note, get_ai_trade_context
 )
+from .polymarket import get_vwap_for_size
 from .types import ScanResult
 
 if TYPE_CHECKING:
     from .engine import TradingEngine
 
 from ..strategy.signal_quality import Signal
+from ..utils.feature_flags import is_enabled
+from ..data.moat_manager import get_moat
+from ..weather.collectors.open_meteo import MultiModelCollector
+from .idempotence import get_idempotence_manager
+
+logger = logging.getLogger(__name__)
 
 class MarketScanner:
     """Core logic for scanning markets and identifying opportunities."""
     
     def __init__(self, engine: TradingEngine):
         self.engine = engine
+        self.idempotence = get_idempotence_manager()
+        self.moat = get_moat()
+        self.multi_collector = MultiModelCollector(LOCATIONS)
 
     def scan_and_update(self) -> ScanResult:
         """Run a full scan cycle."""
@@ -44,6 +55,15 @@ class MarketScanner:
         balance = state.balance
         result = ScanResult()
         pending_signals: list[dict] = []
+
+        # --- V3 MOAT & MULTI-MODEL COLLECTION ---
+        if is_enabled("V3_DATA_MOAT"):
+            try:
+                logger.info("[V3] Collecting multi-model forecasts for the Moat...")
+                forecasts_df = self.multi_collector.fetch_all_forecasts()
+                self.moat.save_forecasts(forecasts_df)
+            except Exception as e:
+                logger.error(f"V3 Moat collection failed: {e}")
 
         for city_slug, loc in LOCATIONS.items():
             self.engine.emit(f" -> {loc.name}...")
@@ -61,6 +81,24 @@ class MarketScanner:
                 event = get_polymarket_event(city_slug, MONTHS[dt.month - 1], dt.day, dt.year)
                 if not event:
                     continue
+                
+                outcomes = get_outcomes(event)
+                for outcome in outcomes:
+                    orderbook = refresh_outcome_orderbook(event["id"], outcome["name"])
+                    best_ask = float(outcome["ask"])
+                    vwap_ask = get_vwap_for_size(orderbook, target_usd=100.0, side="ask")
+                    tick_size = 0.01 
+
+                    # Save to Moat
+                    self.moat.save_quote(event["id"], city_slug, float(outcome["bid"]), best_ask, vwap_ask, outcome["spread"], 5000.0, tick_size)
+
+                    signal_dict = {
+                        "market_id": event["id"],
+                        "question": event.get("question", ""),
+                        "best_ask": best_ask,
+                        "vwap_ask": vwap_ask,
+                        "spread": outcome["spread"],
+                    }
 
                 end_date = event.get("endDate", "")
                 hours = hours_to_resolution(end_date) if end_date else 0
