@@ -30,7 +30,7 @@ class PipelineRunner:
         if command not in cmd_map:
             return False, f"Unknown command: {command}"
         
-        cmd = cmd_map[command]
+        cmd = list(cmd_map[command])
         
         try:
             result = subprocess.run(
@@ -76,8 +76,31 @@ class PipelineRunner:
             results["tune"] = {"success": success, "output": output[:500]}
         
         # 1. Train
-        success, output = self.run("train")
-        results["train"] = {"success": success, "output": output[:500]}
+        # Detect dataset size to choose model
+        try:
+            with open("data/dataset_rows.jsonl", "r") as f:
+                n_rows = sum(1 for _ in f)
+        except:
+            n_rows = 0
+            
+        model_type = "logistic" if n_rows < 300 else "xgboost"
+        train_cmd = ["venv/bin/python3", "bot.py", "train", "--model", model_type, "--save"]
+        
+        try:
+            result = subprocess.run(
+                train_cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                cwd=str(Path.cwd()),
+            )
+            success = (result.returncode == 0)
+            output = result.stdout + result.stderr
+        except Exception as e:
+            success = False
+            output = str(e)
+
+        results["train"] = {"success": success, "output": output[:500], "model_used": model_type}
         if not success:
             return False, results
         

@@ -6,9 +6,10 @@ import time
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from .polymarket import check_market_resolved
-from ..weather.apis import get_actual_temp
 from ..weather.locations import LOCATIONS
+from .polymarket import check_market_resolved
+
+TRADING_FEE_PERCENT = 0.01  # 1% conservative estimate for taker fees/slippage
 
 class MarketResolver:
     """Logic for resolving markets and calculating PnL with real-time actuals."""
@@ -165,7 +166,8 @@ class MarketResolver:
         if market.position and market.position.get("status") == "open":
             pos = market.position
             price, size, shares = pos["entry_price"], pos["cost"], pos["shares"]
-            pnl = round(shares * (1 - price), 2) if won else round(-size, 2)
+            fee = size * TRADING_FEE_PERCENT
+            pnl = round(shares * (1 - price) - fee, 2) if won else round(-size - fee, 2)
             balance = balance + size + pnl
             pos.update({
                 "exit_price": 1.0 if won else 0.0,
@@ -191,7 +193,8 @@ class MarketResolver:
         if market.paper_position and market.paper_position.get("status") == "open":
             pos = market.paper_position
             price, size, shares = pos["entry_price"], pos["cost"], pos["shares"]
-            paper_pnl = round(shares * (1 - price), 2) if won else round(-size, 2)
+            fee = size * TRADING_FEE_PERCENT
+            paper_pnl = round(shares * (1 - price) - fee, 2) if won else round(-size - fee, 2)
             
             pos.update({
                 "exit_price": 1.0 if won else 0.0,

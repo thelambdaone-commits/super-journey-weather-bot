@@ -1,13 +1,21 @@
 """
-Signal Quality Layer (SQL) - Production-grade signal filtering and ranking.
+Signal Quality Layer - Ranking intelligence and Top 1% Audit.
 """
 from __future__ import annotations
 import time
 import json
 import hashlib
+import logging
+import numpy as np
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, Optional
 from pathlib import Path
+from ..utils.feature_flags import is_enabled
+from ..ml.bayesian_model import get_bayesian_model
+from ..ml.anomaly_detector import get_anomaly_detector
+from .sentiment import get_sentiment_analyzer
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Signal:
@@ -20,6 +28,8 @@ class Signal:
     calibration: float
     market_stability: float
     timestamp: float
+    question: str = ""
+    features: Optional[dict] = None
 
     @classmethod
     def from_dict(cls, city: str, signal_dict: dict) -> Signal:
@@ -31,7 +41,7 @@ class Signal:
         mae = float(ml.get("mae", 1.5))
         calibration = max(0.0, 1.0 - (mae / 4.0)) # 0% if MAE >= 4 degrees
         
-        # Market Stability: based on spread (0.10 spread is considered highly unstable)
+        # Market Stability: based on spread
         spread = float(signal_dict.get("spread", 0.05))
         market_stability = max(0.0, 1.0 - (spread / 0.10))
         
@@ -39,146 +49,104 @@ class Signal:
             market_id=signal_dict["market_id"],
             city=city,
             direction="BUY",
-            price=float(signal_dict["entry_price"]),
+            price=float(signal_dict.get("entry_price", 0.5)),
             edge=float(signal_dict.get("ev", 0.0)),
             confidence=confidence,
             calibration=calibration,
             market_stability=market_stability,
-            timestamp=time.time()
+            timestamp=time.time(),
+            question=signal_dict.get("question", ""),
+            features=signal_dict.get("features")
         )
 
 class SignalQualityLayer:
     """
-    Quality control layer for trading signals.
-    Handles hard filters, anti-duplicate logic, and quality scoring.
+    Evaluates signal quality using Top 1% AI briques (Bayesian, Autoencoder, Sentiment).
     """
 
     def __init__(self, config, data_dir: str = "data"):
         self.config = config
-        self.state_path = Path(data_dir) / "signals_state.json"
-        self.state = self._load_state()
+        self.bayesian_model = get_bayesian_model(data_dir)
+        self.anomaly_detector = get_anomaly_detector(data_dir)
+        self.sentiment_analyzer = get_sentiment_analyzer(config)
 
-        # Thresholds from config (with defaults)
-        self.MIN_CONFIDENCE = getattr(config, "signal_min_confidence", 0.75)
-        self.MIN_EDGE = getattr(config, "signal_min_ev", 0.05)
-        self.COOLDOWN_HOURS = getattr(config, "signal_city_cooldown_hours", 8)
-        self.STALE_SECONDS = 7200  # 2 hours
-
-    def _load_state(self) -> Dict[str, Any]:
-        """Load persistent state for duplicates and cooldowns."""
-        if self.state_path.exists():
-            try:
-                return json.loads(self.state_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        return {
-            "last_signals": {},
-            "hashes": []
-        }
-
-    def _save_state(self):
-        """Persist state to disk."""
-        self.state_path.write_text(
-            json.dumps(self.state, indent=2, ensure_ascii=False),
-            encoding="utf-8"
-        )
-
-    def _fingerprint(self, signal: Signal) -> str:
-        """Create a unique hash for a signal to detect exact duplicates."""
-        raw = f"{signal.market_id}:{signal.city}:{signal.direction}"
-        return hashlib.sha256(raw.encode()).hexdigest()
+        # Thresholds
+        self.MIN_CONFIDENCE = getattr(config, "signal_min_confidence", 0.70)
+        self.MIN_EDGE = getattr(config, "signal_min_edge", 0.05)
+        self.STALE_SECONDS = 300
+        self.COOLDOWN_HOURS = 12
 
     def validate_hard_rules(self, signal: Signal) -> Optional[str]:
         """Apply baseline filters (GATES)."""
         if signal.confidence < self.MIN_CONFIDENCE:
             return "low_confidence"
-
         if signal.edge < self.MIN_EDGE:
             return "low_edge"
-
         if signal.price <= 0:
             return "invalid_price"
-
         if (time.time() - signal.timestamp) > self.STALE_SECONDS:
             return "stale_market"
 
+        # 1. Anomaly Autoencoder (#5)
+        if is_enabled("ANOMALY_DETECTION_V2") and self.anomaly_detector.fitted and signal.features:
+            try:
+                from ..ml.dataset import row_to_features
+                X = row_to_features(signal.features)
+                is_ano, err = self.anomaly_detector.is_anomalous(X)
+                if is_ano:
+                    logger.warning(f"[ANOMALY-AE] Reject: error {err:.4f}")
+                    return "reconstruction_anomaly"
+            except Exception as e:
+                logger.error(f"Anomaly check failed: {e}")
+
         return None
+
+    def compute_quality(self, signal: Signal) -> float:
+        """
+        Compute a comprehensive quality score (0.0 to 1.0).
+        Includes Bayesian Uncertainty (#1) and Sentiment Boost (#6).
+        """
+        # 2. Bayesian Epistemic Uncertainty (#1)
+        bayesian_penalty = 0.0
+        if is_enabled("BAYESIAN_UNCERTAINTY") and self.bayesian_model.fitted and signal.features:
+            try:
+                from ..ml.dataset import row_to_features
+                X = row_to_features(signal.features).reshape(1, -1)
+                _, std = self.bayesian_model.predict(X)
+                # Penalize up to 30% if uncertainty is high
+                bayesian_penalty = min(0.3, float(std[0]) * 0.5)
+            except Exception as e:
+                logger.error(f"Bayesian scoring failed: {e}")
+
+        # 3. Sentiment Boost (#6)
+        sentiment_boost = 0.0
+        if is_enabled("SENTIMENT_WEIGHTED_SIGNALS"):
+            try:
+                sentiment_boost = self.sentiment_analyzer.analyze_signal(signal.city, signal.question)
+            except Exception:
+                pass
+
+        # Final Weighted Score
+        score = (
+            0.4 * signal.confidence +
+            0.3 * signal.edge +
+            0.2 * signal.calibration +
+            0.1 * signal.market_stability +
+            0.2 * sentiment_boost -
+            bayesian_penalty
+        )
+        return round(max(0.0, min(1.0, score)), 4)
 
     def is_duplicate(self, signal: Signal) -> bool:
         """Check for duplicates or city-level cooldowns."""
         from src.trading.idempotence import get_idempotence_manager
         
-        # 1. Exact market duplicate check (Window: 24h)
-        key = f"{signal.market_id}:{signal.city}:{signal.direction}"
+        key = f"{signal.market_id}:{signal.city}"
         if get_idempotence_manager().is_duplicate("signal", key, window_seconds=24 * 3600):
             return True
 
-        # 2. City cooldown check
         city_key = f"city_cooldown:{signal.city}"
         if get_idempotence_manager().is_duplicate("city_cooldown", city_key, window_seconds=self.COOLDOWN_HOURS * 3600):
             return True
 
         return False
-
-    def compute_quality(self, signal: Signal) -> float:
-        """
-        Compute a comprehensive quality score (0.0 to 1.0).
-        Ranking intelligence for signals.
-        """
-        return round(
-            0.4 * signal.confidence +
-            0.3 * signal.edge +
-            0.2 * signal.calibration +
-            0.1 * signal.market_stability,
-            4
-        )
-
-    def validate(self, signal: Signal) -> Dict[str, Any]:
-        """Main validation pipeline."""
-        # 1. HARD RULES
-        reason = self.validate_hard_rules(signal)
-        if reason:
-            return {
-                "accepted": False,
-                "reason": reason,
-                "quality": 0.0
-            }
-
-        # 2. DUPLICATES & COOLDOWNS
-        if self.is_duplicate(signal):
-            return {
-                "accepted": False,
-                "reason": "duplicate_or_cooldown",
-                "quality": 0.0
-            }
-
-        # 3. QUALITY SCORE
-        quality = self.compute_quality(signal)
-
-        return {
-            "accepted": True,
-            "reason": "ok",
-            "quality": quality
-        }
-
-    def commit(self, signal: Signal):
-        """Update state after a signal is accepted and sent."""
-        key = f"{signal.market_id}:{signal.city}:{signal.direction}"
-        city_key = f"city_cooldown:{signal.city}"
-        
-        now = time.time()
-        self.state["last_signals"][key] = now
-        self.state["last_signals"][city_key] = now
-        
-        self.state["hashes"].append(self._fingerprint(signal))
-        # Keep only last 1000 hashes
-        self.state["hashes"] = self.state["hashes"][-1000:]
-        
-        self._save_state()
-
-    def process(self, signal: Signal) -> Dict[str, Any]:
-        """Pipeline entry point: validate and commit if accepted."""
-        result = self.validate(signal)
-        if result["accepted"]:
-            self.commit(signal)
-        return result

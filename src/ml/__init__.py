@@ -100,14 +100,20 @@ def train_model(data_dir: str = "data") -> Dict[str, Any]:
 
 
 def load_model(data_dir: str = "data") -> Optional[Dict[str, Any]]:
-    """Load a trained model if present."""
+    """Load a trained model if present (JSON or Pickle)."""
     path = model_path(data_dir)
     if not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return None
+        # Try pickle for Logistic/XGBoost models
+        try:
+            import pickle
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return None
 
 
 def score_forecast(

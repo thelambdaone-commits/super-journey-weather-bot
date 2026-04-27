@@ -380,7 +380,11 @@ if __name__ == "__main__":
         handlers=[logging.StreamHandler(sys.stdout)]
     )
 
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
+    if len(sys.argv) < 2:
+        print("Usage: python bot.py [run|status|report|paper-report|audit|resolve|poll|auto-resolve|errors|live-edge|retrain-check|gem-check|test|train|tune|data-qa|backfill|calibrate|ai-status|ranking-backtest|walk-forward|purge] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")
+        sys.exit(1)
+
+    cmd = sys.argv[1]
 
     if cmd == "run":
         run_loop()
@@ -525,9 +529,21 @@ if __name__ == "__main__":
     elif cmd == "test":
         send_test_message()
     elif cmd == "train":
-        config = get_config()
-        model = create_engine().ml_model
-        print(f"ML model trained: samples={model.get('samples', 0)} cities={model.get('cities', 0)} file={config.data_dir}/ml_model.json")
+        import argparse
+        parser = argparse.ArgumentParser(description="Model training")
+        parser.add_argument("--model", type=str, default="xgboost", choices=["xgboost", "logistic", "bayesian"])
+        parser.add_argument("--save", action="store_true", help="Save the trained model as current")
+        args, _ = parser.parse_known_args()
+        
+        from src.ml.xgboost_train import XGBoostBaseline, format_baseline_report
+        runner = XGBoostBaseline(data_dir="data")
+        result = runner.train(model_type=args.model, params={"save": args.save} if args.save else None)
+        
+        for line in format_baseline_report(result):
+            print(line)
+        
+        if args.save:
+            print(f"Model saved as current version.")
     elif cmd == "tune":
         import argparse
         parser = argparse.ArgumentParser(description="XGBoost hyperparameter tuning")
@@ -589,6 +605,11 @@ if __name__ == "__main__":
             timeout=args.timeout,
         )
         print(f"[OUROBOROS] {result.get('action', 'unknown')}: {result.get('reason', '')}")
+    elif cmd == "walk-forward":
+        from src.backtest.walk_forward import WalkForwardValidator
+        validator = WalkForwardValidator(data_dir="data", train_days=5, test_days=2)
+        validator.run()
+        print(validator.format_report())
     elif cmd == "purge":
         import argparse
         parser = argparse.ArgumentParser(description="Purge last N messages from Telegram")
@@ -609,4 +630,4 @@ if __name__ == "__main__":
                     count += 1
             print(f"✅ Terminé: {count} messages supprimés.")
     else:
-        print("Usage: python bot.py [run|status|report|resolve|test|train|data-qa|backfill|calibrate|ai-status|ranking-backtest|optimize-weights|learning-validation|purge|tune] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")
+        print("Usage: python bot.py [run|status|report|paper-report|audit|resolve|poll|auto-resolve|errors|live-edge|retrain-check|gem-check|test|train|tune|data-qa|backfill|calibrate|ai-status|ranking-backtest|walk-forward|purge] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")

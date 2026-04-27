@@ -16,6 +16,7 @@ from .polymarket import (
     check_market_resolved,
     refresh_outcome_orderbook,
 )
+from .resolver import TRADING_FEE_PERCENT
 from .trade_builder import build_trade_payload
 from ..strategy.filters import should_skip_outcome
 from ..strategy.sizing import size_position
@@ -154,7 +155,8 @@ class MarketScanner:
                                     continue
                                 pos["close_order_id"] = close_res.get("order")
 
-                            pnl = round((current_price - entry) * pos["shares"], 2)
+                            fee = pos["cost"] * TRADING_FEE_PERCENT
+                            pnl = round((current_price - entry) * pos["shares"] - fee, 2)
                             balance += pos["cost"] + pnl
                             pos.update({
                                 "closed_at": datetime.now(timezone.utc).isoformat(),
@@ -202,8 +204,9 @@ class MarketScanner:
                                 signal["ai"] = ai_review
                             
                             if flagged:
+                                reason = ai_review.get("anomaly", {}).get("reason", "anomalie inconnue")
                                 self.record_decision(market, loc, snap, features, signal, probability_estimate, edge_estimate, "SKIP", "ai_flagged", horizon, outcome)
-                                self.engine.emit(f"[AI-SKIP] {loc.name} {date_str} | anomalie signalée")
+                                self.engine.emit(f"[AI-SKIP] {loc.name} {date_str} | {reason}")
                             else:
                                 # Portfolio Risk Check
                                 open_markets = self.engine.storage.load_all_markets()
@@ -238,7 +241,7 @@ class MarketScanner:
                                             }
                                             signal["tp_price"] = exec_res.get("tp_price")
                                             signal["stop_price"] = exec_res.get("stop_price")
-                                            balance -= signal["cost"]
+                                            balance -= signal["cost"] * (1 + TRADING_FEE_PERCENT)
                                             market.position = signal
                                             state.total_trades += 1
                                             result.new_trades += 1
@@ -349,6 +352,7 @@ class MarketScanner:
             "spread": outcome["spread"],
             "shares": round(size / outcome["ask"], 2),
             "cost": size,
+            "best_ask_size_usd": float(outcome.get("best_ask_size", 0.0)) * outcome["ask"],
             "raw_prob": round(bucket_prob(estimate.adjusted_temp, outcome["range"][0], outcome["range"][1], estimate.sigma), 4),
             "p": round(estimate.probability, 4),
             "ev": edge.adjusted_ev,
@@ -367,6 +371,10 @@ class MarketScanner:
                 "mae": estimate.mae,
                 "n": estimate.n,
                 "tier": estimate.tier,
+                "bayesian_uncertainty": signal_dict.get("bayesian_uncertainty"),
+                "anomaly_error": signal_dict.get("anomaly_error"),
+                "sentiment_boost": signal_dict.get("sentiment_boost"),
+                "portfolio_notes": signal_dict.get("portfolio_notes"),
             },
             "features": features,
             "opened_at": datetime.now(timezone.utc).isoformat(),

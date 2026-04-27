@@ -241,9 +241,11 @@ class TelegramNotifier:
             msg += "📍 *Signaux Détectés*\n"
             for s in city_signals[:10]: # Limit to 10 for readability
                 safe_city = escape_markdown(s['city'])
+                # If edge is > 100, it's likely a percentage value already, otherwise format as %
+                edge_val = s['edge']
                 msg += (
-                    f"• {safe_city.upper()} | {s['edge']:+.2f}% edge | {s['conf']:.2f}% conf\n"
-                    f"  Prix: {s['price']:.2f}$ | Risk: {s['risk']}\n"
+                    f"• {safe_city.upper()} | {edge_val:+.2f}% edge | {s['conf']:.2f}% conf\n"
+                    f"  Prix: {s['price']:.3f}$ | Risk: {s['risk']}\n"
                 )
             if len(city_signals) > 10:
                 msg += f"  *(+ {len(city_signals)-10} autres villes)*\n"

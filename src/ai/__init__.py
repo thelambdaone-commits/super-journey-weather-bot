@@ -153,19 +153,21 @@ def check_anomaly(
     
     unit_sym = "°F" if unit == "F" else "°C"
     
-    prompt = f"""Check if this trade is anomalous:
+    prompt = f"""Check if this trade is potentially fraudulent or based on broken data:
 
 City: {city}
 Forecast: {forecast_temp}{unit_sym}
 Market Price: ${market_price}
-Expected Value: {ev:.2f}
+Expected Value (ROI): {ev:.2f} (Profit ratio per dollar bet)
 Model Confidence: {confidence:.2f}
 
-Is this suspicious or a red flag? Respond JSON:
+Is this trade suspiciously good (e.g. market knows something model doesn't) or based on data errors? 
+Respond JSON:
 {{
   "is_anomaly": true/false,
   "reason": "brief reason if anomaly"
-}}"""
+}}
+"""
     
     try:
         response = client.chat.completions.create(

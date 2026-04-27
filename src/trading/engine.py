@@ -28,6 +28,8 @@ from .scanner import MarketScanner
 from .resolver import MarketResolver
 from .paper_account import PaperAccount
 from .execution import ClobExecutor
+from ..strategy.portfolio import PortfolioOptimizer
+from ..utils.feature_flags import is_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,7 @@ class TradingEngine:
         self.scanner = MarketScanner(self)
         self.resolver = MarketResolver(self)
         self.paper_account = PaperAccount(config.data_dir)
+        self.portfolio_optimizer = PortfolioOptimizer(config)
         self.executor = ClobExecutor(config)
         self.running = True
         self.start_time = time.time()
@@ -227,8 +230,26 @@ class TradingEngine:
 
     def process_pending_signals(self, pending_signals: list[dict]):
         """Rank and send top signals."""
-        ranked = self.scoring_engine.rank(pending_signals)
         top_k = max(0, int(getattr(self.config, "signal_top_k", 3)))
+        
+        # Portfolio Optimization (Correlation & Regional Caps) - With Safe Fallback
+        optimized_signals = pending_signals
+        if is_enabled("PORTFOLIO_OPTIMIZATION"):
+            try:
+                all_markets = self.storage.load_all_markets()
+                state = self.storage.load_state()
+                # Calculate Drawdown
+                peak = state.peak_balance or state.starting_balance
+                drawdown_pct = max(0.0, (peak - state.balance) / peak * 100)
+                
+                optimized_signals = self.portfolio_optimizer.optimize_sizing(
+                    pending_signals, all_markets, state.balance, drawdown_pct
+                )
+            except Exception as e:
+                logger.error(f"Portfolio Optimization failed, falling back to raw signals: {e}")
+                optimized_signals = pending_signals
+        
+        ranked = self.scoring_engine.rank(optimized_signals)
         selected = ranked[:top_k] if top_k else []
         by_market_id = {item["signal"]["market_id"]: item for item in pending_signals}
 
