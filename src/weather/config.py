@@ -1,6 +1,7 @@
 """
 Config module - centralized configuration management.
 """
+
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Optional
 # Try to load dotenv
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -18,7 +20,7 @@ except ImportError:
 @dataclass
 class Config:
     """Central configuration for WeatherBot."""
-    
+
     # Trading
     balance: float = 10000.0
     max_bet: float = 20.0
@@ -45,33 +47,57 @@ class Config:
     signal_duplicate_window_hours: int = 24
     signal_min_price_move: float = 0.02
     signal_top_k: int = 3
-    
+
+    # Dual Flow Configuration
+    ai_flow_enabled: bool = True
+    ai_min_confidence: float = 0.50
+    ai_max_ev_threshold: float = 2.0
+    ai_allow_low_confidence_high_ev: bool = False
+    ai_force_blocking: bool = False  # False = parallel mode (max profit)
+
+    signal_flow_enabled: bool = True
+    signal_min_quality_score: float = 0.60
+    signal_min_confidence: float = 0.70
+    signal_min_edge: float = 0.05
+    signal_bayesian_penalty_max: float = 0.30
+
+    # Paper training mode: looser thresholds, smaller stakes, live unaffected.
+    paper_training_mode: bool = True
+    paper_training_min_ev: float = 0.02
+    paper_training_max_price: float = 0.75
+    paper_training_max_spread: float = 0.10
+    paper_training_min_volume: int = 100
+    paper_training_min_confidence: float = 0.25
+    paper_training_min_quality_score: float = 0.25
+    paper_training_max_bet_usd: float = 5.0
+    paper_training_min_bet_usd: float = 1.0
+
     # Micro-Live Caps (hard limits - override Kelly)
     max_live_bet_usd: float = 10.0  # $10 per trade max for micro-live
     max_live_total_exposure_usd: float = 50.0  # $50 total max for micro-live
-    
+
     # API Keys
     meteoblue_key: str = ""
     weatherbit_key: str = ""
-    
+
     # Telegram
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_signal_chat_id: str = ""
-    
+
     # AI
     groq_api_key: str = ""
-    
+
     # Paths
     data_dir: str = "data"
     logs_dir: str = "logs"
-    
+
     @classmethod
     def load(cls, config_path: str = "config.json") -> "Config":
         """Load configuration from JSON file and environment variables."""
         path = Path(config_path)
         data = {}
-        
+
         # 1. Start with JSON if it exists
         if path.exists():
             try:
@@ -79,12 +105,12 @@ class Config:
                     data = json.load(f)
             except (Exception,) as e:
                 pass
-        
+
         # 2. Override with environment variables (uppercase)
         for field_name, field_def in cls.__dataclass_fields__.items():
             env_key = field_name.upper()
             env_val = os.environ.get(env_key)
-            
+
             if env_val is not None:
                 # Type conversion based on dataclass field type
                 target_type = field_def.type
@@ -99,17 +125,14 @@ class Config:
                         data[field_name] = env_val
                 except (ValueError, TypeError):
                     pass
-        
+
         # Filter only valid fields for constructor
         valid_data = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         return cls(**valid_data)
-    
+
     def save(self, config_path: str = "config.json"):
         """Save configuration to JSON file."""
-        data = {
-            f.name: getattr(self, f.name, None)
-            for f in self.__dataclass_fields__.values()
-        }
+        data = {f.name: getattr(self, f.name, None) for f in self.__dataclass_fields__.values()}
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 

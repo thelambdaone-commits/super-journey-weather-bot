@@ -22,6 +22,7 @@ line-ending = "lf"
 [tool.pytest.ini_options]
 addopts = "--cov=src.trading.paper_account --cov-report=term-missing --cov-fail-under=80"
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.coverage.run]
 branch = true

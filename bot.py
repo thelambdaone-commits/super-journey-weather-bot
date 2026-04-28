@@ -2,6 +2,7 @@
 """
 WeatherBot CLI wrapper.
 """
+
 from __future__ import annotations
 
 import signal
@@ -11,6 +12,9 @@ import os
 from datetime import datetime, timezone
 from src.notifications.telegram_control_center import send_crash as crash_alert
 
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts"))
 import backfill as backfill_cli
 from src.ai.diagnostics import format_ai_diagnostics, run_ai_diagnostics
 from src.ai.ourobouros import run_ourobouros
@@ -216,7 +220,7 @@ def send_test_message() -> bool:
         "→ Latence: `Active`\n"
         "──────────────\n"
         "✅ *Bot is working perfectly!*",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
     print(f"Telegram test: {'OK' if result else 'FAILED'}")
     return result
@@ -271,6 +275,7 @@ def print_learning_validation() -> None:
 def print_paper_report():
     """Print paper trading performance report."""
     from src.trading.paper_account import PaperAccount
+
     config = get_config()
     account = PaperAccount(config.data_dir)
     print(account.get_report())
@@ -285,17 +290,17 @@ def print_audit():
     from src.backtest.stress_test import run_fat_tail_stress, format_stress_report
     from src.data.reproduce import save_audit_artifact, get_code_hash
     from src.storage import get_storage
-    
+
     config = get_config()
     storage = get_storage(config.data_dir)
     state = storage.load_state()
-    
+
     print(f"🔬 AUDIT ENGINE v2.5 | Code Hash: {get_code_hash()}")
     report_text = f"Audit v2.5 - {datetime.now(timezone.utc).isoformat()}\n"
-    
+
     # 1. Anti-Leakage Audit
     run_leakage_audit()
-    
+
     # 2. Backtest Benchmarking (Out-of-Sample)
     print("\n--- PERFORMANCE COMPARATIVE (Benchmark) ---")
     backtester = RankingBacktester()
@@ -316,12 +321,12 @@ def print_audit():
     for m in markets:
         if m.status == "resolved" and m.pnl is not None:
             resolved_trades.append({"pnl": m.pnl, "unix_ts": os.path.getmtime(config.data_dir)})
-            
+
     metrics = calculate_audit_metrics(resolved_trades, state.starting_balance)
     audit_txt = format_audit_report(metrics)
     print(audit_txt)
     report_text += audit_txt
-    
+
     # 4. Calibration Audit (Brier Score)
     print("\n--- CALIBRATION AUDIT (Probabilistic Accuracy) ---")
     probs = [m.position.get("p", 0) for m in markets if m.status == "resolved" and m.position]
@@ -333,7 +338,7 @@ def print_audit():
         report_text += cal_txt
     else:
         print("Insufficient data for calibration audit.")
-    
+
     # 5. Portfolio Risk Snapshot
     print("\n--- PORTFOLIO RISK SNAPSHOT ---")
     risk_summary = create_engine().risk_manager.get_risk_summary(markets)
@@ -377,12 +382,14 @@ def main():
     # Setup basic logging
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
     )
 
     if len(sys.argv) < 2:
-        print("Usage: python bot.py [run|status|report|paper-report|audit|resolve|poll|auto-resolve|errors|live-edge|retrain-check|gem-check|test|train|tune|data-qa|backfill|calibrate|ai-status|ranking-backtest|walk-forward|purge] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]")
+        print(
+            "Usage: python bot.py [run|status|report|paper-report|audit|resolve|poll|auto-resolve|errors|live-edge|retrain-check|gem-check|test|train|tune|data-qa|backfill|calibrate|ai-status|ranking-backtest|walk-forward|purge] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]"
+        )
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -408,16 +415,17 @@ def main():
     elif cmd == "poll":
         from datetime import date, timedelta
         import argparse
+
         parser = argparse.ArgumentParser(description="Poll actual temps")
         parser.add_argument("--date", type=str, default=None)
         parser.add_argument("--days", type=int, default=0)
         parser.add_argument("--city", type=str)
         parser.add_argument("--json", action="store_true")
         args, _ = parser.parse_known_args()
-        
+
         from src.weather.apis import get_actual_temp
         from src.weather.locations import LOCATIONS
-        
+
         if args.date:
             date_str = args.date
         elif args.days > 0:
@@ -425,7 +433,7 @@ def main():
             date_str = d.isoformat()
         else:
             date_str = date.today().isoformat()
-        
+
         if args.city:
             loc = LOCATIONS.get(args.city)
             if not loc:
@@ -440,9 +448,10 @@ def main():
                 temp = get_actual_temp(slug, date_str)
                 if temp:
                     results[slug] = temp
-            
+
             if args.json:
                 import json
+
                 print(json.dumps(results, indent=2))
             else:
                 print(f"{'City':<15} {'Temp':<8}")
@@ -456,16 +465,16 @@ def main():
         result = engine.resolver.auto_resolve_pending()
         print(f"=== AUTO-RESOLVE ===")
         print(f"Resolved: {result.get('total', 0)}")
-        if result.get('resolved'):
+        if result.get("resolved"):
             print("\nResolved markets:")
-            for m in result['resolved'][:10]:
+            for m in result["resolved"][:10]:
                 # Find market for unit
-                market = engine.storage.load_market(m['city'], m['date'])
+                market = engine.storage.load_market(m["city"], m["date"])
                 unit = "°F" if market and market.unit == "F" else "°C"
                 print(f"  {m['city']} | {m['date']} | {m['actual']}{unit}")
-        if result.get('pending'):
+        if result.get("pending"):
             print(f"\nPending ({len(result['pending'])})")
-            for m in result['pending'][:5]:
+            for m in result["pending"][:5]:
                 print(f"  {m['city']} | {m['date']}")
     elif cmd == "errors":
         config = get_config()
@@ -483,21 +492,22 @@ def main():
     elif cmd == "live-edge":
         config = get_config()
         engine = create_engine()
-        
+
         # Get recent errors and update live bias
         errors = engine.resolver.get_recent_errors(days=7)
-        ecmwf_bias = errors.get('ecmwf', {}).get('mean', 0)
-        hrrr_bias = errors.get('hrrr', {}).get('mean', 0)
-        
+        ecmwf_bias = errors.get("ecmwf", {}).get("mean", 0)
+        hrrr_bias = errors.get("hrrr", {}).get("mean", 0)
+
         # Update Edge Engine with live biases
         from src.strategy.edge import update_live_bias
+
         update_live_bias("ecmwf", ecmwf_bias)
         update_live_bias("hrrr", hrrr_bias)
-        
+
         print("=== LIVE EDGE (Real-Time Adjusted) ===")
         print(f"ECMWF bias: {ecmwf_bias:+.2f}°C")
         print(f"HRRR bias: {hrrr_bias:+.2f}°C")
-        
+
         # Check retrain status
         should_train, reason = engine.resolver.should_retrain(min_resolutions=10)
         print(f"Retrain: {reason}")
@@ -509,10 +519,11 @@ def main():
         print(f"Details: {details}")
     elif cmd == "gem-check":
         from src.strategy.gem import GEMDetector
+
         detector = GEMDetector()
         print(detector.format_report())
         print()
-        
+
         # Test case
         test_score = detector.score(
             model_probability=0.70,
@@ -531,30 +542,34 @@ def main():
         send_test_message()
     elif cmd == "train":
         import argparse
+
         parser = argparse.ArgumentParser(description="Model training")
         parser.add_argument("--model", type=str, default="xgboost", choices=["xgboost", "logistic", "bayesian"])
         parser.add_argument("--save", action="store_true", help="Save the trained model as current")
         args, _ = parser.parse_known_args()
-        
+
         from src.ml.xgboost_train import XGBoostBaseline, format_baseline_report
+
         runner = XGBoostBaseline(data_dir="data")
         result = runner.train(model_type=args.model, params={"save": args.save} if args.save else None)
-        
+
         for line in format_baseline_report(result):
             print(line)
-        
+
         if args.save:
             print(f"Model saved as current version.")
     elif cmd == "tune":
         import argparse
+
         parser = argparse.ArgumentParser(description="XGBoost hyperparameter tuning")
         parser.add_argument("--search", type=str, default="random", choices=["grid", "random"])
         parser.add_argument("--trials", type=int, default=32)
         parser.add_argument("--timeout", type=int, default=300)
         parser.add_argument("--min-improvement", type=float, default=0.01)
         args, _ = parser.parse_known_args()
-        
+
         from src.ml.hyperopt import run_tuning, format_tuning_report
+
         result = run_tuning(
             data_dir="data",
             search_type=args.search,
@@ -564,7 +579,7 @@ def main():
         )
         for line in format_tuning_report(result):
             print(line)
-        
+
         if result.accepted:
             print("\n✅ Params accepted - saved to tuning history")
         else:
@@ -581,6 +596,7 @@ def main():
         run_ranking_backtest()
     elif cmd == "optimize-weights":
         from src.strategy.optimize import run_grid_search
+
         result = run_grid_search(min_snapshots=50)
         if result is None:
             print("Not enough data for weight optimization (need >= 50 eligible snapshots)")
@@ -592,13 +608,14 @@ def main():
         print_learning_validation()
     elif cmd == "ouroboros":
         import argparse
+
         parser = argparse.ArgumentParser(description="Ouroboros auto-improvement")
         parser.add_argument("--min-resolutions", type=int, default=10)
         parser.add_argument("--max-retrain-per-day", type=int, default=2)
         parser.add_argument("--patience", type=int, default=5)
         parser.add_argument("--timeout", type=int, default=300)
         args, _ = parser.parse_known_args()
-        
+
         result = run_ourobouros(
             min_resolutions=args.min_resolutions,
             max_retrain_per_day=args.max_retrain_per_day,
@@ -608,18 +625,20 @@ def main():
         print(f"[OUROBOROS] {result.get('action', 'unknown')}: {result.get('reason', '')}")
     elif cmd == "walk-forward":
         from src.backtest.walk_forward import WalkForwardValidator
+
         validator = WalkForwardValidator(data_dir="data", train_days=5, test_days=2)
         validator.run()
         print(validator.format_report())
     elif cmd == "purge":
         import argparse
+
         parser = argparse.ArgumentParser(description="Purge last N messages from Telegram")
         parser.add_argument("--limit", type=int, default=100, help="Number of messages to try deleting")
         args, _ = parser.parse_known_args()
-        
+
         notifier = get_notifier()
         print(f"=== PURGE CHANNEL (Limit: {args.limit}) ===")
-        
+
         # Probe to get current message ID
         probe_id = notifier.send("🧹 **PURGE INITIALISÉE**\n__ Nettoyage en cours... __", parse_mode="Markdown")
         if not probe_id:
@@ -630,11 +649,13 @@ def main():
                 if notifier.delete_message(i):
                     count += 1
             print(f"✅ Terminé: {count} messages supprimés.")
+
+
 if __name__ == "__main__":
     try:
         main()
     except (KeyboardInterrupt, SystemExit):
         sys.exit(0)
-    except (Exception) as e:
+    except Exception as e:
         crash_alert("bot.py", repr(e))
         raise

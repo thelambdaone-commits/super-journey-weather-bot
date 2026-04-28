@@ -14,36 +14,37 @@ def should_skip_outcome(config, outcome: dict, features: dict, adjusted_ev: floa
     min_ev = float(getattr(config, "min_ev", MIN_EV))
     max_spread = float(getattr(config, "max_slippage", MAX_SPREAD))
     min_volume = float(getattr(config, "min_volume", MIN_VOLUME))
-    
+    min_confidence = float(getattr(config, "min_confidence", MIN_CONFIDENCE))
+
     # 1. Anti-Crossed Book Guard (Crucial for realistic Paper Trading)
     bid = float(outcome.get("bid", 0.0))
     ask = float(outcome.get("ask", 1.0))
-    if ask <= bid or ask <= 0.001:
+    if ask <= bid or ask < 0.01:  # Ignore prices below 1 cent (data errors)
         return True
 
     # 2. Volume filter (strict)
     volume = float(outcome.get("volume", 0))
     if volume > 0 and volume < min_volume:
         return True
-    
+
     # 3. Price filter
-    if ask >= config.max_price:
+    if ask >= float(getattr(config, "max_price", 0.45)):
         return True
-    
+
     # 4. Spread filter (strict)
     spread = float(outcome.get("spread", 0.0))
     if spread > max_spread:
         return True
-    
+
     # 5. EV filter (strict)
     if adjusted_ev < min_ev:
         return True
 
     # 6. Confidence filter
     confidence = features.get("confidence")
-    if confidence is not None and float(confidence) < MIN_CONFIDENCE:
+    if confidence is not None and float(confidence) < min_confidence:
         return True
-    
+
     # 7. Volatility / Bucket Width Filter (Phase 1.2)
     # Don't bet if the bucket is too narrow relative to the forecast uncertainty
     sigma = features.get("sigma")
@@ -60,9 +61,9 @@ def should_skip_outcome(config, outcome: dict, features: dict, adjusted_ev: floa
     gfs = features.get("gfs_max")
     if ecmwf is not None and gfs is not None:
         diff = abs(float(ecmwf) - float(gfs))
-        if diff > 5.0: # 5 degree threshold for high-uncertainty
+        if diff > 5.0:  # 5 degree threshold for high-uncertainty
             return True
-    
+
     return False
 
 
@@ -74,5 +75,6 @@ def get_validation_report() -> dict:
         "min_volume": MIN_VOLUME,
         "min_confidence": MIN_CONFIDENCE,
     }
+
 
 # Audit: Includes fee and slippage awareness

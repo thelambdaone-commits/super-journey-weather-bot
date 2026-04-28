@@ -504,9 +504,9 @@ class TradingEngine:
         self.feedback.notify_hourly_report(summary, city_signals)
 
         # Daily Live Report (As requested)
-        from src.notifications.telegram_control_center import daily_report
+        from src.notifications.telegram_control_center import send_daily_report
 
-        daily_report(summary)
+        send_daily_report(summary)
 
         # Persist last report timestamp
         state.last_report_ts = time.time()
