@@ -17,6 +17,6 @@ pytz==2023.4
 rich==15.0.0
 py-clob-client==0.34.6
 pytest==9.0.3
-pytest-cov==7.0.0
+pytest-cov==7.1.0
 ruff==0.14.8
 xgboost>=2.1.0,<3.0.0
