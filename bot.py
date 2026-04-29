@@ -189,6 +189,35 @@ def run_loop() -> None:
     ENGINE.run_forever()
 
 
+def run_once() -> None:
+    """Run one scan cycle and exit."""
+    global ENGINE
+    ENGINE = create_engine()
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
+
+    if ENGINE.modes.live_trade:
+        confirm_env = os.environ.get("LIVE_TRADE_CONFIRM", "").lower()
+        if confirm_env != "true":
+            ENGINE.emit("🚨 BLOCKED: LIVE_TRADE requires LIVE_TRADE_CONFIRM=true in .env")
+            return
+        readiness_error = ENGINE.executor.readiness_error()
+        if readiness_error:
+            ENGINE.emit(f"🚨 BLOCKED: CLOB executor is not ready: {readiness_error}")
+            return
+
+    ENGINE.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] scanning...")
+    try:
+        result = ENGINE.scanner.scan_and_update()
+        state = ENGINE.storage.load_state()
+        ENGINE.emit(
+            f" balance: ${state.balance:,.2f} | new: {result.new_trades} | "
+            f"closed: {result.closed} | resolved: {result.resolved}"
+        )
+    finally:
+        ENGINE.feedback.notify_stopped("once complete")
+
+
 def print_status() -> None:
     """Show status."""
     engine = create_engine()
@@ -395,7 +424,10 @@ def main():
     cmd = sys.argv[1]
 
     if cmd == "run":
-        run_loop()
+        if "--once" in sys.argv:
+            run_once()
+        else:
+            run_loop()
     elif cmd == "status":
         print_status()
     elif cmd == "report":
@@ -512,8 +544,19 @@ def main():
         should_train, reason = engine.resolver.should_retrain(min_resolutions=10)
         print(f"Retrain: {reason}")
     elif cmd == "retrain-check":
-        engine = create_engine()
-        should_trigger, details = engine.resolver.check_and_trigger_retrain(min_resolutions=10)
+        from src.ai.ourobouros.engine import OuroborosEngine
+
+        ouroboros = OuroborosEngine()
+        status = ouroboros.get_status()
+        state = status["state"]
+        resolved_rows = status["resolved_rows"]
+        last_trained_resolved = state.get("last_trained_resolved", 0)
+        pending_resolutions = max(0, resolved_rows - last_trained_resolved)
+        should_trigger = pending_resolutions >= ouroboros.config.min_resolutions
+        details = (
+            f"{pending_resolutions} nouvelles résolutions depuis le dernier entraînement "
+            f"({resolved_rows} résolues total, dernier train={last_trained_resolved})"
+        )
         print("=== RETRAIN CHECK ===")
         print(f"Ready: {should_trigger}")
         print(f"Details: {details}")

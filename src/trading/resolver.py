@@ -36,6 +36,120 @@ class MarketResolver:
         if actual is not None:
             self._last_poll_cache[cache_key] = actual
         return actual
+
+    @staticmethod
+    def _outcome_from_actual(pos: dict, actual: float | None) -> bool | None:
+        """Return whether the traded bucket matched the final actual."""
+        if actual is None:
+            return None
+        low = pos.get("bucket_low")
+        high = pos.get("bucket_high")
+        if low is None or high is None:
+            return None
+        return float(low) <= float(actual) <= float(high)
+
+    def finalize_closed_position(self, market) -> tuple[bool | None, float | None]:
+        """Mark already-closed positions resolved once the final actual is known.
+
+        Stops and manual closes already have realized PnL, but they still need a
+        final weather outcome so feedback rows can teach the model whether the
+        original forecast bucket was right.
+        """
+        if market.status == "resolved":
+            return None, None
+
+        pos = None
+        for candidate in (market.position, market.paper_position):
+            if candidate and candidate.get("status") == "closed":
+                pos = candidate
+                break
+        if not pos:
+            return None, None
+
+        won = self._outcome_from_actual(pos, market.actual_temp)
+        if won is None:
+            return None, None
+
+        pnl = pos.get("pnl")
+        market.pnl = pnl
+        market.status = "resolved"
+        market.resolved_outcome = "win" if won else "loss"
+
+        if hasattr(self.engine, "feedback_recorder") and market.city in LOCATIONS:
+            self.engine.feedback_recorder.record_resolution(
+                market=market,
+                location=LOCATIONS[market.city],
+                modes=self.engine.modes,
+                pos=pos,
+                outcome=market.resolved_outcome,
+            )
+
+        return won, pnl
+
+    def _resolve_surebet_position(self, market, balance: float):
+        """Resolve an open multi-leg surebet from actual weather."""
+        pos = None
+        account = None
+        if market.position and market.position.get("status") == "open" and market.position.get("type") == "surebet":
+            pos = market.position
+            account = "live"
+        elif (
+            market.paper_position
+            and market.paper_position.get("status") == "open"
+            and market.paper_position.get("type") == "surebet"
+        ):
+            pos = market.paper_position
+            account = "paper"
+
+        if not pos:
+            return balance, None, None
+
+        if market.city and market.date and market.actual_temp is None:
+            actual = get_actual_temp(market.city, market.date)
+            if actual is not None:
+                market.actual_temp = actual
+        if market.actual_temp is None:
+            return balance, None, None
+
+        winning_leg = None
+        for leg in pos.get("legs", []):
+            if float(leg["bucket_low"]) <= float(market.actual_temp) <= float(leg["bucket_high"]):
+                winning_leg = leg
+                break
+
+        cost = float(pos.get("cost", 0.0))
+        payout = float(winning_leg.get("shares", 0.0)) if winning_leg else 0.0
+        fee = cost * TRADING_FEE_PERCENT
+        pnl = round(payout - cost - fee, 2)
+        won = winning_leg is not None and pnl >= 0
+
+        pos.update({
+            "winning_market_id": winning_leg.get("market_id") if winning_leg else None,
+            "exit_price": 1.0 if winning_leg else 0.0,
+            "pnl": pnl,
+            "close_reason": "surebet_resolved",
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+            "status": "closed",
+        })
+        market.pnl = pnl
+        market.status = "resolved"
+        market.resolved_outcome = "win" if won else "loss"
+
+        if account == "live":
+            balance = balance + cost + pnl
+        else:
+            self.engine.paper_account.record_result(won, pnl, cost=cost)
+
+        if hasattr(self.engine, "feedback_recorder") and market.city in LOCATIONS:
+            self.engine.feedback_recorder.record_resolution(
+                market=market,
+                location=LOCATIONS[market.city],
+                modes=self.engine.modes,
+                pos=pos,
+                outcome=market.resolved_outcome,
+            )
+
+        return balance, won, pnl
     
     def auto_resolve_pending(self) -> dict:
         """Auto-resolve all pending markets using real-time actuals and update state."""
@@ -92,6 +206,19 @@ class MarketResolver:
                             "won": won,
                             "pnl": display_pnl
                         })
+                    else:
+                        won, pnl = self.finalize_closed_position(market)
+                        if won is not None:
+                            resolved_pos = market.position or market.paper_position or {}
+                            resolved_count += 1
+                            results["resolved"].append({
+                                "city": market.city,
+                                "date": market.date,
+                                "actual": actual,
+                                "won": won,
+                                "pnl": pnl if pnl is not None else resolved_pos.get("pnl"),
+                                "close_reason": resolved_pos.get("close_reason"),
+                            })
                     self.engine.storage.save_market(market)
                 else:
                     results["pending"].append({
@@ -176,27 +303,41 @@ class MarketResolver:
         return False, reason
 
     def resolve_market(self, market, balance: float):
-        """Resolve a single market (live and paper)."""
+        """Resolve a single market (live and paper) using actual temperature."""
+        new_balance, won, pnl = self._resolve_surebet_position(market, balance)
+        if won is not None:
+            return new_balance, won, pnl
+
         # 1. Check if we have anything to resolve
         live_open = bool(market.position and market.position.get("status") == "open")
-        paper_open = bool(market.paper_position and market.paper_position.get("status") == "open")
+        paper_open = bool(market.paper_position and market.paper_position.get("status") in ("open", "paper"))
         if not live_open and not paper_open:
             return balance, None, None
 
-        market_id = (market.position if live_open else market.paper_position)["market_id"]
-        won = check_market_resolved(market_id)
-        if won is None:
-            return balance, None, None
-
-        # Fetch actual temperature once
+        # 2. Fetch actual temperature if not already available
         if market.city and market.date and market.actual_temp is None:
             actual = get_actual_temp(market.city, market.date)
             if actual is not None:
                 market.actual_temp = actual
 
-        # 2. Resolve Live Position
+        # 3. Determine outcome
+        won = None
+        pos_for_outcome = market.position or market.paper_position
+
+        if market.actual_temp is not None and pos_for_outcome:
+            # PRIMARY: Use actual temperature vs bucket
+            won = self._outcome_from_actual(pos_for_outcome, market.actual_temp)
+        elif pos_for_outcome:
+            # FALLBACK: Use Polymarket resolution status
+            market_id = pos_for_outcome["market_id"]
+            won = check_market_resolved(market_id)
+
+        if won is None:
+            return balance, None, None
+
+        # 4. Resolve Live Position
         pnl = None
-        if market.position and market.position.get("status") == "open":
+        if live_open:
             pos = market.position
             price, size, shares = pos["entry_price"], pos["cost"], pos["shares"]
             fee = size * TRADING_FEE_PERCENT
@@ -212,7 +353,7 @@ class MarketResolver:
             market.pnl = pnl
             market.status = "resolved"
             market.resolved_outcome = "win" if won else "loss"
-            
+
             self.engine.feedback_recorder.record_resolution(
                 market=market,
                 location=LOCATIONS[market.city],
@@ -221,14 +362,13 @@ class MarketResolver:
                 outcome=market.resolved_outcome,
             )
 
-        # 3. Resolve Paper Position
-        paper_pnl = None
-        if market.paper_position and market.paper_position.get("status") == "open":
+        # 5. Resolve Paper Position
+        if paper_open:
             pos = market.paper_position
             price, size, shares = pos["entry_price"], pos["cost"], pos["shares"]
             fee = size * TRADING_FEE_PERCENT
             paper_pnl = round(shares * (1 - price) - fee, 2) if won else round(-size - fee, 2)
-            
+
             pos.update({
                 "exit_price": 1.0 if won else 0.0,
                 "pnl": paper_pnl,
@@ -238,11 +378,14 @@ class MarketResolver:
             })
             # Update separate paper account
             self.engine.paper_account.record_result(won, paper_pnl, cost=size)
-            
+
             # If no live position, update market status based on paper
             if not market.position:
                 market.status = "resolved"
                 market.resolved_outcome = "win" if won else "loss"
+                # Clear paper state so new trades can be executed if market reopens
+                market.paper_state = None
+                market.paper_position = None
 
         return balance, won, pnl
 

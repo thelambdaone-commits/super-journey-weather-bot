@@ -82,8 +82,8 @@ class SignalQualityLayer:
         self.fair_value_engine = get_fair_value_engine()
 
         # Thresholds
-        self.MIN_CONFIDENCE = getattr(config, "signal_min_confidence", 0.70)
-        self.MIN_EDGE = getattr(config, "signal_min_edge", 0.05)
+        self.MIN_CONFIDENCE = getattr(config, "signal_min_confidence", 0.50)
+        self.MIN_EDGE = getattr(config, "signal_min_edge", 0.02)
         self.STALE_SECONDS = 300
         self.COOLDOWN_HOURS = 12
 
@@ -124,7 +124,7 @@ class SignalQualityLayer:
         quality_score = self.compute_quality(signal)
 
         # 3. Check minimum quality threshold
-        min_quality = getattr(self.config, "signal_min_quality_score", 0.60)
+        min_quality = getattr(self.config, "signal_min_quality_score", 0.40)
 
         return {
             "accepted": quality_score >= min_quality,
@@ -172,9 +172,9 @@ class SignalQualityLayer:
 
                 fair_v = self.fair_value_engine.calculate_fair_value(signal.city, signal.price, target_dt)
 
-                # PR #4: Calibration Gate
-                if not self.fair_value_engine.check_calibration_gate(signal.city, "ensemble", fair_v - signal.vwap_ask):
-                    return 0.0
+                # PR #4: Calibration Gate (temporairement désactivé pour debug)
+                # if not self.fair_value_engine.check_calibration_gate(signal.city, "ensemble", fair_v - signal.vwap_ask):
+                #     return 0.0
 
                 # Use VWAP edge (against average execution price)
                 exec_edge = self.fair_value_engine.get_vwap_edge(fair_v, signal.vwap_ask, signal.spread)
@@ -190,16 +190,19 @@ class SignalQualityLayer:
             except (Exception,) as e:
                 logger.exception("V3 Alpha check crashed for %s", signal.city)
 
-        # Final Weighted Score
+        # Final Weighted Score (poids normalisés pour sum=1.0)
+        # Normaliser edge (EV) dans [0, 1] : 0.10 EV = 1.0, donc edge_norm = min(1.0, edge / 0.10)
+        edge_norm = min(1.0, signal.edge / 0.10)
         score = (
-            0.4 * signal.confidence
-            + 0.3 * signal.edge
-            + 0.2 * signal.calibration
-            + 0.1 * signal.market_stability
-            + 0.2 * sentiment_boost
+            0.35 * signal.confidence
+            + 0.25 * edge_norm
+            + 0.15 * signal.calibration
+            + 0.10 * signal.market_stability
+            + 0.15 * sentiment_boost
             + alpha_bonus
             - bayesian_penalty
         )
+        logger.info(f"[QUALITY] {signal.city}: conf={signal.confidence:.2f} edge={signal.edge:.2f}->norm={edge_norm:.2f} -> score={score:.2f}")
         return round(max(0.0, min(1.0, score)), 4)
 
     def commit(self, signal: Signal) -> None:

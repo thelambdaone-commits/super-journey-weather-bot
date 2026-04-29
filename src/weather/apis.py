@@ -3,15 +3,17 @@ Weather API clients - multiple sources with fallback.
 """
 import logging
 import math
-import time
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 from .locations import Location, get_by_slug, get_timezone, get_forecast_priority
+from .open_meteo_rate_limiter import rate_limited_get
+from .ensemble_optimizer import EnsembleOptimizer
 from src.notifications.telegram_control_center import send_incident
 from src.notifications.desk_metrics import log_event
 
 logger = logging.getLogger(__name__)
+METNO_USER_AGENT = "weatherbot/1.0 github.com/weatherbot"
 
 
 class WeatherAPIError(Exception):
@@ -35,7 +37,7 @@ def get_ecmwf(city_slug: str, dates: list[str]) -> Dict[str, float]:
     
     for attempt in range(3):
         try:
-            data = requests.get(url, timeout=(5, 10)).json()
+            data = rate_limited_get(url, timeout=(5, 10), max_429_retries=0).json()
             if "error" not in data:
                 log_event("api_call", provider="ECMWF", ok=True, latency_s=1.0) # Placeholder for now
                 for date, temp in zip(data["daily"]["time"], data["daily"]["temperature_2m_max"]):
@@ -45,8 +47,6 @@ def get_ecmwf(city_slug: str, dates: list[str]) -> Dict[str, float]:
         except (Exception,) as e:
             log_event("api_call", provider="ECMWF", ok=False, error=str(e), latency_s=0.0)
             log_event("error", error_type="network", module="weather.apis", message=f"ECMWF attempt {attempt} failed: {e}")
-            if attempt < 2:
-                time.sleep(1)
     raise WeatherAPIError(f"ECMWF failed after 3 attempts")
 
 
@@ -66,15 +66,14 @@ def get_gfs(city_slug: str, dates: list[str]) -> Dict[str, float]:
     
     for attempt in range(3):
         try:
-            data = requests.get(url, timeout=(5, 10)).json()
+            data = rate_limited_get(url, timeout=(5, 10), max_429_retries=0).json()
             if "error" not in data:
                 for date, temp in zip(data["daily"]["time"], data["daily"]["temperature_2m_max"]):
                     if date in dates and temp is not None:
                         result[date] = round(temp, 1) if loc.unit == "C" else round(temp)
             return result
         except (Exception,) as e:
-            if attempt < 2:
-                time.sleep(1)
+            pass
     raise WeatherAPIError(f"GFS failed after 3 attempts")
 
 
@@ -95,15 +94,14 @@ def get_hrrr(city_slug: str, dates: list[str]) -> Dict[str, float]:
     
     for attempt in range(3):
         try:
-            data = requests.get(url, timeout=(5, 10)).json()
+            data = rate_limited_get(url, timeout=(5, 10), max_429_retries=0).json()
             if "error" not in data:
                 for date, temp in zip(data["daily"]["time"], data["daily"]["temperature_2m_max"]):
                     if date in dates and temp is not None:
                         result[date] = round(temp)
             return result
         except (Exception,) as e:
-            if attempt < 2:
-                time.sleep(1)
+            pass
     raise WeatherAPIError(f"HRRR failed after 3 attempts")
 
 
@@ -155,6 +153,51 @@ def get_nws(city_slug: str, dates: list[str]) -> Dict[str, float]:
     return result
 
 
+def get_metno(city_slug: str, dates: list[str]) -> Dict[str, float]:
+    """MET Norway Locationforecast fallback, global and keyless."""
+    loc = get_by_slug(city_slug)
+    result: Dict[str, float] = {}
+
+    try:
+        url = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+        response = requests.get(
+            url,
+            params={"lat": loc.lat, "lon": loc.lon},
+            headers={"User-Agent": METNO_USER_AGENT},
+            timeout=(5, 10),
+        )
+        if response.status_code == 429:
+            logger.warning("MET Norway rate limited for %s", city_slug)
+            return result
+        response.raise_for_status()
+        data = response.json()
+
+        daily_values: dict[str, list[float]] = {date: [] for date in dates}
+        for item in data.get("properties", {}).get("timeseries", []):
+            time_str = item.get("time", "")
+            date_str = time_str[:10]
+            if date_str not in daily_values:
+                continue
+
+            details = item.get("data", {}).get("instant", {}).get("details", {})
+            temp = details.get("air_temperature")
+            if temp is not None:
+                daily_values[date_str].append(float(temp))
+
+        for date, values in daily_values.items():
+            if not values:
+                continue
+            temp_c = max(values)
+            if loc.unit == "F":
+                result[date] = round((temp_c * 9 / 5) + 32)
+            else:
+                result[date] = round(temp_c, 1)
+    except (Exception,) as e:
+        logger.warning(f"MET Norway fallback failed for {city_slug}: {e}")
+
+    return result
+
+
 def get_metar(city_slug: str) -> Optional[float]:
     """Current METAR observation."""
     loc = get_by_slug(city_slug)
@@ -192,7 +235,7 @@ def get_actual_temp(city_slug: str, date_str: str, station: str = "GENERIC") -> 
             f"&temperature_unit={temp_unit}"
             f"&timezone=auto"
         )
-        data = requests.get(url, timeout=(5, 8)).json()
+        data = rate_limited_get(url, timeout=(5, 8)).json()
         values = data.get("daily", {}).get("temperature_2m_max", [])
 
         if values and values[0] is not None:
@@ -224,39 +267,46 @@ def get_actual_temp(city_slug: str, date_str: str, station: str = "GENERIC") -> 
 
 
 def get_forecasts(city_slug: str, dates: list[str]) -> Dict[str, Dict]:
-    """Get multi-source forecasts with fallback."""
+    """Get multi-source forecasts with fallback (parallelized)."""
     now = datetime.now(timezone.utc).isoformat()
-    
-    try:
-        ecmwf = get_ecmwf(city_slug, dates)
-    except (Exception,) as e:
-        logger.warning(f"ECMWF failed for {city_slug}: {e}")
-        send_incident(f"ECMWF degraded for {city_slug}. Fallback active.")
-        ecmwf = {}
+    optimizer = EnsembleOptimizer()
 
-    try:
-        hrrr = get_hrrr(city_slug, dates)
-    except (Exception,) as e:
-        logger.warning(f"HRRR failed for {city_slug}: {e}")
-        hrrr = {}
+    # Parallel fetch using ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    try:
-        gfs = get_gfs(city_slug, dates)
-    except (Exception,) as e:
-        logger.warning(f"GFS failed for {city_slug}: {e}")
-        gfs = {}
+    def safe_fetch(func, name):
+        try:
+            return func(city_slug, dates)
+        except (Exception,) as e:
+            logger.warning(f"{name} failed for {city_slug}: {e}")
+            if name == "ECMWF":
+                send_incident(f"ECMWF degraded for {city_slug}. Fallback active.")
+            return {}
 
-    try:
-        dwd = get_dwd(city_slug, dates)
-    except (Exception,) as e:
-        logger.warning(f"DWD failed for {city_slug}: {e}")
-        dwd = {}
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {
+            executor.submit(safe_fetch, get_ecmwf, "ECMWF"): "ecmwf",
+            executor.submit(safe_fetch, get_hrrr, "HRRR"): "hrrr",
+            executor.submit(safe_fetch, get_gfs, "GFS"): "gfs",
+            executor.submit(safe_fetch, get_metno, "MET Norway"): "metno",
+            executor.submit(safe_fetch, get_dwd, "DWD"): "dwd",
+            executor.submit(safe_fetch, get_nws, "NWS"): "nws",
+        }
+        results = {}
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                results[name] = future.result()
+            except (Exception,) as e:
+                results[name] = {}
+                logger.warning(f"{name} future failed for {city_slug}: {e}")
 
-    try:
-        nws = get_nws(city_slug, dates)
-    except (Exception,) as e:
-        logger.warning(f"NWS failed for {city_slug}: {e}")
-        nws = {}
+        ecmwf = results.get("ecmwf", {})
+        hrrr = results.get("hrrr", {})
+        gfs = results.get("gfs", {})
+        metno = results.get("metno", {})
+        dwd = results.get("dwd", {})
+        nws = results.get("nws", {})
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     
     snapshots = {}
@@ -268,20 +318,32 @@ def get_forecasts(city_slug: str, dates: list[str]) -> Dict[str, Dict]:
             "gfs": gfs.get(date),
             "dwd": dwd.get(date),
             "nws": nws.get(date),
+            "metno": metno.get(date),
             "metar": get_metar(city_slug) if date == today else None,
         }
+        loc = get_by_slug(city_slug)
+        optimal = optimizer.optimize(city_slug, loc.unit, snap)
+        if optimal:
+            snap["optimal"] = optimal.temp
+            snap["optimal_sigma"] = optimal.sigma
+            snap["optimal_confidence"] = optimal.confidence
+            snap["optimal_weights"] = optimal.weights
+            snap["optimal_primary_source"] = optimal.primary_source
         
         # Find best forecast
-        loc = get_by_slug(city_slug)
         priority = get_forecast_priority(loc.region)
         
         best = None
         best_source = None
-        for src in priority:
-            if snap.get(src) is not None:
-                best = snap[src]
-                best_source = src
-                break
+        if optimal and len(optimal.weights) >= 2:
+            best = optimal.temp
+            best_source = optimal.primary_source
+        else:
+            for src in priority:
+                if snap.get(src) is not None:
+                    best = snap[src]
+                    best_source = src
+                    break
         
         snap["best"] = best
         snap["best_source"] = best_source

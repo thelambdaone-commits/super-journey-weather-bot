@@ -86,6 +86,16 @@ class TelegramNotifier:
         
         try:
             response = requests.post(url, json=payload, timeout=10)
+            if (
+                not response.ok
+                and parse_mode
+                and response.status_code == 400
+                and "parse" in response.text.lower()
+            ):
+                fallback_payload = dict(payload)
+                fallback_payload.pop("parse_mode", None)
+                response = requests.post(url, json=fallback_payload, timeout=10)
+
             if not response.ok:
                 print(f"Telegram error {response.status_code}: {response.text}")
                 return None
@@ -119,7 +129,10 @@ class TelegramNotifier:
             f"📡 *Source:* {source.upper()}"
         )
         if ai_note:
-            msg += f"\n\n📝 *NOTE D'EXÉCUTION*\n_ {ai_note.strip()} _"
+            escaped_note = escape_markdown(ai_note.strip())
+            note_lines = escaped_note.split('\n')
+            formatted_note = '\n'.join(f'  {line}' for line in note_lines)
+            msg += f"\n\n📝 *NOTE D'EXÉCUTION*\n{formatted_note}"
         return self.send(msg, parse_mode="Markdown")
 
     def notify_signal(self, city: str, date: str, bucket: str, price: float, 
@@ -157,7 +170,10 @@ class TelegramNotifier:
         
         message = format_weather_signal(payload)
         if ai_note:
-            message = f"{message}\n\n_ {ai_note.strip()} _"
+            escaped_note = escape_markdown(ai_note.strip())
+            note_lines = escaped_note.split('\n')
+            formatted_note = '\n'.join(f'  {line}' for line in note_lines)
+            message = f"{message}\n\n{formatted_note}"
             
         return self.send(message, parse_mode="Markdown", chat_id=self.signal_chat_id)
 
@@ -252,7 +268,7 @@ class TelegramNotifier:
         else:
             msg += "✅ *Surveillance active :* Aucun signal majeur détecté.\n"
             
-        msg += "\n🚨 _ Audit Engine v2.5.2 Active _"
+        msg += "\n🚨 Audit Engine v2.5.2 Active"
         return self.send(msg, parse_mode="Markdown")
 
     def notify_gem_alert(self, signal: dict) -> bool:
@@ -281,7 +297,7 @@ class TelegramNotifier:
             f"→ Horizon: {signal['horizon']} jours\n"
             f"──────────────\n"
             f"🧠 *RAISONNEMENT*\n"
-            f"_ {safe_reason} _\n\n"
+            f"{safe_reason}\n\n"
             f"🔗 [Accéder au Marché]({signal['url']})\n"
             f"──────────────\n"
             f"⚠️ *Statut Risque:* {signal['risk_status'].upper()}"

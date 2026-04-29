@@ -47,6 +47,7 @@ class Config:
     calibration_min: int = 30
     paper_mode: bool = False
     live_trade: bool = False
+    confirm_live_trading: str = ""  # Double lock: must be "I_ACCEPT_REAL_LOSS"
     signal_mode: bool = True
     tui_mode: bool = False
     dashboard_enabled: bool = True

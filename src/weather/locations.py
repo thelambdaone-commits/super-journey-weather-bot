@@ -61,12 +61,12 @@ MONTHS = ["january", "february", "march", "april", "may", "june",
 
 # Forecast source priority by region
 FORECAST_PRIORITY = {
-    "us": ["hrrr", "nws", "ecmwf", "metar"],
-    "eu": ["ecmwf", "dwd", "metar"],
-    "asia": ["ecmwf", "metar"],
-    "sa": ["ecmwf", "metar"],
-    "oc": ["ecmwf", "metar"],
-    "ca": ["ecmwf", "metar"],
+    "us": ["hrrr", "nws", "ecmwf", "gfs", "metno", "metar"],
+    "eu": ["ecmwf", "dwd", "gfs", "metno", "metar"],
+    "asia": ["ecmwf", "gfs", "metno", "metar"],
+    "sa": ["ecmwf", "gfs", "metno", "metar"],
+    "oc": ["ecmwf", "gfs", "metno", "metar"],
+    "ca": ["ecmwf", "gfs", "metno", "metar"],
 }
 
 

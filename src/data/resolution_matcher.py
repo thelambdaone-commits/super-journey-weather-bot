@@ -286,8 +286,8 @@ class ResolutionMatcher:
             }
 
             try:
-                import requests
-                response = requests.get(url, params=params, timeout=10)
+                from src.weather.open_meteo_rate_limiter import rate_limited_get
+                response = rate_limited_get(url, params=params, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
                     temps = data.get("daily", {}).get("temperature_2m_max", [])

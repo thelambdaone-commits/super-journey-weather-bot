@@ -21,8 +21,8 @@ from .polymarket import (
 )
 from .resolver import TRADING_FEE_PERCENT
 from .trade_builder import build_trade_payload
-from ..strategy.filters import should_skip_outcome
-from ..strategy.sizing import size_position
+from ..strategy.filters import run_all_filters
+# from ..strategy.sizing import size_position  # TODO: use final_position_size instead
 from .helpers import (
     log_paper_trade,
     build_signal_marker,
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from .engine import TradingEngine
 
 from ..strategy.signal_quality import Signal
+from ..strategy.surebet import detect_surebet
 from ..utils.feature_flags import is_enabled
 from ..data.moat_manager import get_moat
 from ..weather.collectors.open_meteo import MultiModelCollector
@@ -92,12 +93,50 @@ class MarketScanner:
                 event = get_polymarket_event(city_slug, MONTHS[dt.month - 1], dt.day, dt.year)
                 if not event:
                     continue
+                event_slug = event.get("slug", "")
+
+                # Filter 1: Minimum volume
+                market_volume_raw = event.get("volume", 0) or 0
+                try:
+                    market_volume = float(market_volume_raw)
+                except (ValueError, TypeError):
+                    market_volume = 0.0
+
+                min_volume = float(getattr(self.engine.config, "min_volume", 500))
+                if market_volume < min_volume:
+                    self.engine.emit(
+                        f"[LOW-VOL] {loc.name} {date_str} | Vol: ${market_volume:.0f} < ${min_volume:.0f}"
+                    )
+                    continue
 
                 outcomes = get_outcomes(event)
                 for outcome in outcomes:
-                    if not refresh_outcome_orderbook(outcome):
+                    # CLOB guard for paper mode
+                    if self.engine.modes.live_trade:
+                        if not refresh_outcome_orderbook(outcome):
+                            continue
+                    else:
+                        self.engine.emit("[PAPER] skipped CLOB refresh, using Gamma prices")
+
+                    # Safety check bid/ask
+                    bid = float(outcome.get("best_bid", 0) or 0)
+                    ask = float(outcome.get("best_ask", 0) or 0)
+
+                    if bid <= 0 or ask <= 0:
+                        self.engine.emit(f"[NO-LIQUIDITY] {loc.name}")
                         continue
-                    best_ask = float(outcome["ask"])
+
+                    # Filter 2: Maximum spread (corrected formula)
+                    spread = (ask - bid) / ((ask + bid) / 2)
+                    max_spread = getattr(self.engine.config, "max_spread", 0.05)
+
+                    if spread > max_spread:
+                        self.engine.emit(
+                            f"[HIGH-SPREAD] {loc.name} | Spread: {spread:.2%} > {max_spread:.0%}"
+                        )
+                        continue
+
+                    best_ask = ask
                     orderbook = {"asks": [{"price": outcome["ask"], "size": outcome.get("best_ask_size", 0.0)}]}
                     vwap_ask = get_vwap_for_size(orderbook, target_usd=100.0, side="ask")
                     tick_size = 0.01
@@ -147,6 +186,37 @@ class MarketScanner:
                     continue
 
                 outcomes = get_outcomes(event)
+                if getattr(self.engine.config, "surebet_detection_enabled", True):
+                    surebet_outcomes = []
+                    for outcome in outcomes:
+                        if refresh_outcome_orderbook(outcome):
+                            surebet_outcomes.append(outcome)
+                    surebet = detect_surebet(
+                        surebet_outcomes,
+                        max_total_stake=float(getattr(self.engine.config, "surebet_max_total_stake_usd", 50.0)),
+                        min_profit_pct=float(getattr(self.engine.config, "surebet_min_profit_pct", 0.01)),
+                        fee_buffer_pct=float(getattr(self.engine.config, "surebet_fee_buffer_pct", 0.003)),
+                        min_liquidity_usd=float(getattr(self.engine.config, "surebet_min_liquidity_usd", 5.0)),
+                    )
+                    if surebet:
+                        self.engine.emit(
+                            f"[SUREBET-DETECTED] {loc.name} {date_str} | "
+                            f"profit=${surebet.guaranteed_profit:.2f} "
+                            f"({surebet.profit_pct:.2%}) | legs={len(surebet.legs)}"
+                        )
+                        if not market.position and not market.paper_position:
+                            balance, executed = self._execute_surebet(
+                                surebet,
+                                market,
+                                loc,
+                                date_str,
+                                balance,
+                                state,
+                                result,
+                            )
+                            if executed:
+                                self.engine.storage.save_market(market)
+                                continue
                 market.all_outcomes = outcomes
 
                 snap = snapshots.get(date_str, {})
@@ -232,8 +302,12 @@ class MarketScanner:
                             result.closed += 1
                             self.engine.emit(f"[STOP/TRAIL] {loc.name} {date_str} | {pnl:+.2f}")
 
-                # Look for new opportunities
-                if not market.position and forecast_temp is not None and hours >= self.engine.config.min_hours:
+                # Look for new opportunities (check both live and paper positions)
+                has_open_position = (
+                    (market.position and market.position.get("status") == "open") or
+                    (market.paper_position and market.paper_position.get("status") == "open")
+                )
+                if not has_open_position and forecast_temp is not None and hours >= self.engine.config.min_hours:
                     opportunity = self.find_opportunity(city_slug, loc, snap, outcomes, hours, base_features, balance)
                     if opportunity:
                         outcome, probability_estimate, edge_estimate, features = opportunity
@@ -249,13 +323,15 @@ class MarketScanner:
 
                         # Continue with trade sizing and filters
                         sizing_max_bet = self._max_bet_for_mode()
-                        kelly, size = size_position(
+                        from ..strategy.sizing import final_position_size
+                        sizing_result = final_position_size(
                             probability_estimate.probability,
                             outcome["ask"],
                             balance,
-                            self.engine.config.kelly_fraction,
-                            sizing_max_bet,
+                            self.engine.config,
                         )
+                        kelly = sizing_result.fractional_kelly
+                        size = sizing_result.final_size
                         if self._paper_training_enabled() and 0 < size < getattr(
                             self.engine.config, "paper_training_min_bet_usd", 1.0
                         ):
@@ -327,12 +403,17 @@ class MarketScanner:
                             if getattr(self.engine.config, "signal_flow_enabled", True):
                                 sql_signal = Signal.from_dict(loc.name, signal)
                                 quality_result = self._validate_signal_for_mode(sql_signal, signal)
+                                self.engine.emit(f"[DEBUG] {loc.name}: quality_score={quality_result['score']:.2f} accepted={quality_result['accepted']}")
 
                                 if quality_result["accepted"]:
                                     if self._signal_filters_pass(signal, quality_result):
                                         signal_ok = True
+                                        self.engine.emit(f"[DEBUG] {loc.name}: signal_ok=True (filters passed)")
+                                    else:
+                                        self.engine.emit(f"[DEBUG] {loc.name}: signal_ok=False (filters failed) conf={signal.get('ml',{}).get('confidence',0):.2f} ev={signal.get('ev',0):.2f}")
 
                             # EXÉCUTION: OR logic (si l'un des deux flux accepte)
+                            self.engine.emit(f"[DEBUG] {loc.name}: ai_ok={ai_ok} signal_ok={signal_ok} | pos={market.position is not None} | paper_state={market.paper_state is not None} | signal_state={market.signal_state is not None}")
                             if ai_ok or signal_ok:
                                 if ai_ok and signal_ok:
                                     source = "AI+SIGNAL"
@@ -345,6 +426,7 @@ class MarketScanner:
                                 risk_check = self.engine.risk_manager.check_new_trade(
                                     city_slug, signal["cost"], open_markets
                                 )
+                                self.engine.emit(f"[DEBUG] {loc.name}: risk_check={risk_check}")
 
                                 if not risk_check["allowed"]:
                                     self.record_decision(
@@ -364,6 +446,7 @@ class MarketScanner:
                                     continue
 
                                 # Exécuter le trade
+                                self.engine.emit(f"[DEBUG] {loc.name}: calling _execute_trade | paper_mode={self.engine.modes.paper_mode} | signal_mode={self.engine.modes.signal_mode}")
                                 balance, executed = self._execute_trade(
                                     signal,
                                     market,
@@ -376,8 +459,9 @@ class MarketScanner:
                                     balance,
                                     state,
                                     result,
-                                    event_slug=event.get("slug", ""),
+                                    event_slug=event_slug,
                                 )
+                                self.engine.emit(f"[DEBUG] {loc.name}: executed={executed}")
                                 if executed:
                                     self.record_decision(
                                         market,
@@ -437,6 +521,84 @@ class MarketScanner:
             self.engine.storage.save_state(state)
 
         return result
+
+    def _surebet_position(self, surebet, loc, date_str: str, mode: str, execution: dict | None = None) -> dict:
+        legs = [
+            {
+                "market_id": leg.market_id,
+                "token_id": leg.token_id,
+                "bucket_low": leg.bucket_low,
+                "bucket_high": leg.bucket_high,
+                "ask": leg.ask,
+                "stake": leg.stake,
+                "shares": round(leg.stake / leg.ask, 4),
+                "payout": leg.payout,
+            }
+            for leg in surebet.legs
+        ]
+        return {
+            "type": "surebet",
+            "market_id": f"surebet:{loc.slug}:{date_str}",
+            "question": f"Surebet multi-bucket {loc.name} {date_str}",
+            "cost": surebet.total_cost,
+            "shares": sum(leg["shares"] for leg in legs),
+            "entry_price": round(surebet.implied_sum / len(legs), 4),
+            "bucket_low": min(leg["bucket_low"] for leg in legs),
+            "bucket_high": max(leg["bucket_high"] for leg in legs),
+            "legs": legs,
+            "guaranteed_payout": surebet.guaranteed_payout,
+            "guaranteed_profit": surebet.guaranteed_profit,
+            "profit_pct": surebet.profit_pct,
+            "implied_sum": surebet.implied_sum,
+            "opened_at": datetime.now(timezone.utc).isoformat(),
+            "status": "open",
+            "mode": mode,
+            "execution": execution or {},
+        }
+
+    def _execute_surebet(self, surebet, market, loc, date_str, balance, state, result):
+        """Execute a surebet atomically in paper or live mode."""
+        if self.engine.modes.live_trade and getattr(self.engine.config, "surebet_live_execution_enabled", False):
+            legs = [
+                {
+                    "token_id": leg.token_id,
+                    "stake": leg.stake,
+                    "ask": leg.ask,
+                }
+                for leg in surebet.legs
+            ]
+            execution = self.engine.executor.place_surebet_atomic(legs)
+            if not execution.get("success"):
+                self.engine.emit(f"[SUREBET-LIVE-ERROR] {loc.name} {date_str} | {execution.get('reason')}")
+                return balance, False
+
+            market.position = self._surebet_position(surebet, loc, date_str, "live", execution)
+            balance -= surebet.total_cost * (1 + TRADING_FEE_PERCENT)
+            state.total_trades += 1
+            result.new_trades += 1
+            self.engine.emit(
+                f"[SUREBET-LIVE] {loc.name} {date_str} | "
+                f"cost=${surebet.total_cost:.2f} guaranteed=${surebet.guaranteed_profit:.2f}"
+            )
+            return balance, True
+
+        if self.engine.modes.paper_mode and getattr(self.engine.config, "surebet_paper_execution_enabled", True):
+            self.engine.paper_account.record_trade(surebet.total_cost)
+            market.paper_position = self._surebet_position(surebet, loc, date_str, "paper")
+            market.paper_state = {
+                "market_id": market.paper_position["market_id"],
+                "type": "surebet",
+                "profit_pct": surebet.profit_pct,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            }
+            result.new_trades += 1
+            self.engine.emit(
+                f"[SUREBET-PAPER] {loc.name} {date_str} | "
+                f"cost=${surebet.total_cost:.2f} guaranteed=${surebet.guaranteed_profit:.2f}"
+            )
+            return balance, True
+
+        return balance, False
 
     def find_opportunity(self, city_slug, loc, snap, outcomes, hours, base_features, balance):
         """Find the best tradeable outcome in a market."""
@@ -542,17 +704,17 @@ class MarketScanner:
         min_quality = (
             getattr(config, "paper_training_min_quality_score", 0.25)
             if paper_training
-            else getattr(config, "signal_min_quality_score", 0.60)
+            else getattr(config, "signal_min_quality_score", 0.40)
         )
         min_confidence = (
             getattr(config, "paper_training_min_confidence", 0.25)
             if paper_training
-            else getattr(config, "signal_min_confidence", 0.70)
+            else getattr(config, "signal_min_confidence", 0.30)
         )
         min_edge = (
             getattr(config, "paper_training_min_ev", 0.02)
             if paper_training
-            else getattr(config, "signal_min_edge", 0.05)
+            else getattr(config, "signal_min_edge", 0.01)
         )
 
         # Quality score filter
@@ -694,6 +856,16 @@ class MarketScanner:
                 market.paper_state = build_signal_marker(signal)
                 result.new_trades += 1
                 self.engine.emit(f"[PAPER-BUY] {loc.name} {date_str} | Source: {source}")
+                self.engine.feedback.notify_trade_open(
+                    loc.name,
+                    date_str,
+                    f"{signal['bucket_low']}-{signal['bucket_high']}{unit_sym}",
+                    signal["entry_price"],
+                    signal["ev"],
+                    signal["cost"],
+                    signal["forecast_src"],
+                    f"{note}" if note else ""
+                )
                 executed = True
 
         if self.engine.modes.signal_mode and should_emit_marker(market.signal_state, signal):

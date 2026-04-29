@@ -12,6 +12,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _city_lookup_values(city: str) -> list[str]:
+    """Return compatible city keys for historical name/slug storage."""
+    raw = str(city)
+    normalized = raw.lower()
+    values = {raw, normalized, normalized.replace(" ", "-")}
+
+    try:
+        from ..weather.locations import LOCATIONS
+
+        for slug, loc in LOCATIONS.items():
+            if normalized in {slug.lower(), loc.name.lower()}:
+                values.add(slug)
+                values.add(loc.name)
+                values.add(loc.name.lower())
+    except (Exception,):
+        logger.debug("Location lookup unavailable for city normalization", exc_info=True)
+
+    return sorted(values)
+
+
 class MoatError(Exception):
     """Base exception for Moat operations."""
 
@@ -166,18 +186,20 @@ class MoatManager:
         if not self.ready:
             return pl.DataFrame()
         try:
-            # PARAMETERIZED QUERY
+            # PARAMETERIZED QUERY - tolerate historical mixed-case city values.
+            city_values = _city_lookup_values(city)
+            city_placeholders = ", ".join(["?"] * len(city_values))
             query = """
                 SELECT model, temp_c, run_cycle 
                 FROM forecast_runs 
-                WHERE city = ? 
+                WHERE LOWER(city) IN ({city_placeholders}) 
                 AND valid_time = ?
                 AND run_cycle < now()
                 ORDER BY run_cycle DESC
-            """
+            """.format(city_placeholders=city_placeholders)
             conn = self._connect()
             try:
-                return conn.execute(query, (city, target_time)).pl()
+                return conn.execute(query, (*[value.lower() for value in city_values], target_time)).pl()
             finally:
                 conn.close()
         except (Exception,) as e:
@@ -193,9 +215,13 @@ class MoatManager:
                 res = conn.execute(
                     """
                     SELECT AVG(ABS(error_c))
-                    FROM calibration_events
-                    WHERE city = ? AND model = ?
-                    ORDER BY event_ts DESC LIMIT ?
+                    FROM (
+                        SELECT error_c
+                        FROM calibration_events
+                        WHERE LOWER(city) = LOWER(?) AND model = ?
+                        ORDER BY event_ts DESC
+                        LIMIT ?
+                    )
                 """,
                     (city, model, limit),
                 ).fetchone()

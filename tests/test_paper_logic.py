@@ -159,6 +159,55 @@ class TestPaperLogic(unittest.TestCase):
         self.assertEqual(market.paper_position["pnl"], -20.2)
         self.assertEqual(self.paper.get_state().losses, 1)
 
+    def test_resolver_finalizes_closed_stop_for_learning(self):
+        market = Market(
+            city="paris",
+            city_name="Paris",
+            date="2026-04-28",
+            actual_temp=21.0,
+            position={
+                "market_id": "stopped-live",
+                "entry_price": 0.50,
+                "cost": 20.0,
+                "shares": 40.0,
+                "bucket_low": 20.0,
+                "bucket_high": 20.0,
+                "status": "closed",
+                "close_reason": "stop",
+                "pnl": -6.5,
+            },
+        )
+
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            def record_resolution(self, **kwargs):
+                self.calls.append(kwargs)
+
+        @dataclass
+        class Modes:
+            live_trade: bool = False
+            paper_mode: bool = False
+            signal_mode: bool = True
+
+        @dataclass
+        class Engine:
+            paper_account: PaperAccount
+            feedback_recorder: Recorder
+            modes: Modes
+
+        recorder = Recorder()
+        won, pnl = MarketResolver(Engine(self.paper, recorder, Modes())).finalize_closed_position(market)
+
+        self.assertFalse(won)
+        self.assertEqual(pnl, -6.5)
+        self.assertEqual(market.status, "resolved")
+        self.assertEqual(market.resolved_outcome, "loss")
+        self.assertEqual(market.pnl, -6.5)
+        self.assertEqual(len(recorder.calls), 1)
+        self.assertEqual(recorder.calls[0]["outcome"], "loss")
+
 
 if __name__ == "__main__":
     unittest.main()

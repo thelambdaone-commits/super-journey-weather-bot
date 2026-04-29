@@ -18,7 +18,12 @@ from ..features.builder import FeatureEngine
 from ..ml import train_model
 from ..probability.inference import ProbabilityEngine
 from ..storage import Market, Storage, get_storage
-from ..strategy.edge import EdgeEngine
+from ..strategy.edge import (
+    gross_edge,
+    net_ev,
+    estimate_fee,
+    estimate_slippage,
+)
 from ..strategy.scoring import ScoringEngine
 from ..strategy.signal_quality import SignalQualityLayer, Signal
 from ..strategy.risk_manager import PortfolioRiskManager
@@ -32,6 +37,22 @@ from .paper_account import PaperAccount
 from .execution import ClobExecutor
 from ..strategy.portfolio import PortfolioOptimizer
 from ..utils.feature_flags import is_enabled
+
+
+def can_trade_live(config) -> tuple[bool, str]:
+    """
+    Standalone function to check all preconditions for live trading.
+    Double lock: live_trade=true AND confirm_live_trading="I_ACCEPT_REAL_LOSS"
+    Also checks kill_switch and executor readiness.
+    """
+    if not config.live_trade:
+        return False, "live_trade=false"
+    if config.kill_switch_enabled:
+        return False, "kill_switch_active"
+    if config.confirm_live_trading != "I_ACCEPT_REAL_LOSS":
+        return False, "missing_double_lock (need confirm_live_trading='I_ACCEPT_REAL_LOSS')"
+    # Executor readiness is checked separately where executor is available
+    return True, "ok"
 
 logger = logging.getLogger(__name__)
 
@@ -174,16 +195,7 @@ class TradingEngine:
         Check all preconditions for live trading.
         Double lock: live_trade=true AND confirm_live_trading="I_ACCEPT_REAL_LOSS"
         """
-        if not self.config.live_trade:
-            return False, "live_trade=false"
-        if self.config.kill_switch_enabled:
-            return False, "kill_switch_active"
-        if self.config.confirm_live_trading != "I_ACCEPT_REAL_LOSS":
-            return False, "missing_double_lock (need confirm_live_trading='I_ACCEPT_REAL_LOSS')"
-        readiness_error = self.executor.readiness_error()
-        if readiness_error:
-            return False, f"executor_not_ready: {readiness_error}"
-        return True, "ok"
+        return can_trade_live(self.config)
 
     def run_forever(self) -> None:
         """Run the main engine loop."""

@@ -4,12 +4,7 @@ import argparse
 import json
 from datetime import date, timedelta
 
-try:
-    import requests
-except ImportError:
-    print("Error: requests not installed")
-    exit(1)
-
+from src.weather.open_meteo_rate_limiter import rate_limited_get
 from src.weather.locations import LOCATIONS
 
 
@@ -29,7 +24,7 @@ def get_actual_temp(lat: float, lon: float, date_str: str, unit: str = "celsius"
     }
     
     try:
-        r = requests.get(url, params=params, timeout=15)
+        r = rate_limited_get(url, params=params, timeout=15)
         data = r.json()
         temps = data.get("daily", {}).get("temperature_2m_max", [])
         if temps and temps[0] is not None:

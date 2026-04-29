@@ -25,7 +25,8 @@ def build_weather_features(snapshot: dict) -> dict:
         snapshot.get("hrrr"), 
         snapshot.get("gfs"), 
         snapshot.get("dwd"), 
-        snapshot.get("nws")
+        snapshot.get("nws"),
+        snapshot.get("metno"),
     ]
     forecasts = [float(value) for value in values if value is not None]
     ensemble_mean = _mean(forecasts)
@@ -40,8 +41,12 @@ def build_weather_features(snapshot: dict) -> dict:
         "hrrr_max": snapshot.get("hrrr"),
         "gfs_max": snapshot.get("gfs"),
         "dwd_max": snapshot.get("dwd"),
+        "metno_max": snapshot.get("metno"),
+        "optimal_max": snapshot.get("optimal"),
+        "optimal_sigma": snapshot.get("optimal_sigma"),
+        "optimal_confidence": snapshot.get("optimal_confidence"),
+        "optimal_weights": snapshot.get("optimal_weights"),
         "ensemble_mean": round(ensemble_mean, 4) if ensemble_mean is not None else None,
         "ensemble_std": round(ensemble_std, 4) if ensemble_std is not None else None,
         "forecast_spread": round(spread, 4) if spread is not None else None,
     }
-

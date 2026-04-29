@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 from ..utils.feature_flags import is_enabled
+from ..utils.rate_limiter import RequestThrottler
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ class ClobExecutor:
         self.signature_type = int(os.getenv("POLYMARKET_SIGNATURE_TYPE", "0"))
         self._client: Any | None = None
         self._import_error: str | None = None
+        # Rate limiter for max_orders_per_minute
+        max_per_min = getattr(config, "max_orders_per_minute", 10)
+        self._order_throttler = RequestThrottler(max_per_minute=max_per_min)
 
         try:
             from py_clob_client.client import ClobClient  # noqa: F401
@@ -144,6 +148,23 @@ class ClobExecutor:
     def _round_size(size: float) -> float:
         return round(max(0.0, float(size)), 4)
 
+    def _can_trade_live(self) -> tuple[bool, str]:
+        """Check live trading preconditions (double lock, kill switch, etc.)."""
+        from .engine import TradingEngine
+        # We need config - get it from the module level
+        from ..weather.config import get_config
+        config = get_config()
+        
+        if not config.live_trade:
+            return False, "live_trade=false"
+        if config.kill_switch_enabled:
+            return False, "kill_switch_active"
+        if config.confirm_live_trading != "I_ACCEPT_REAL_LOSS":
+            return False, "missing_double_lock (need confirm_live_trading='I_ACCEPT_REAL_LOSS')"
+        if not self.is_ready:
+            return False, self.readiness_error() or "executor_not_ready"
+        return True, "ok"
+
     def place_bracket_order(
         self,
         token_id: str,
@@ -157,6 +178,12 @@ class ClobExecutor:
         Open a live position, place a take-profit limit order and return a
         synthetic stop threshold for the scanner to monitor.
         """
+        # Check live trading preconditions first
+        allowed, reason = self._can_trade_live()
+        if not allowed:
+            logger.warning("Live trade blocked: %s", reason)
+            return {"success": False, "reason": reason}
+
         if not self.is_ready:
             reason = self.readiness_error() or "config_missing"
             logger.warning("Skipping live trade: %s", reason)
@@ -207,6 +234,51 @@ class ClobExecutor:
         except (Exception,) as exc:
             logger.exception("CLOB bracket execution failed")
             return {"success": False, "reason": str(exc)}
+
+    def place_surebet_atomic(self, legs: list[dict]) -> dict:
+        """Buy all surebet legs with FOK orders; rollback filled legs on failure."""
+        if not self.is_ready:
+            return {"success": False, "reason": self.readiness_error() or "config_missing", "filled": []}
+
+        filled = []
+        try:
+            for leg in legs:
+                token_id = str(leg.get("token_id") or "")
+                stake = self._round_size(float(leg.get("stake", 0.0)))
+                ask = self._round_price(float(leg.get("ask", 0.0)))
+                if not token_id or stake <= 0 or ask <= 0:
+                    raise ValueError(f"invalid_surebet_leg:{leg}")
+
+                response = self._place_fok_buy_market(token_id, stake)
+                filled.append({
+                    "token_id": token_id,
+                    "stake": stake,
+                    "ask": ask,
+                    "shares": round(stake / ask, 4),
+                    "order": self._order_id(response),
+                    "raw": response,
+                })
+
+            return {"success": True, "filled": filled}
+
+        except (Exception,) as exc:
+            rollback = []
+            for leg in reversed(filled):
+                rollback.append({
+                    "token_id": leg["token_id"],
+                    "result": self.close_position_market(leg["token_id"], leg["shares"]),
+                })
+            logger.exception("CLOB surebet atomic execution failed; rollback attempted")
+            return {"success": False, "reason": str(exc), "filled": filled, "rollback": rollback}
+
+    def _place_fok_buy_market(self, token_id: str, stake: float) -> Any:
+        client = self._get_client()
+        from py_clob_client.clob_types import MarketOrderArgs, OrderType
+        from py_clob_client.order_builder.constants import BUY
+
+        order = MarketOrderArgs(token_id=str(token_id), amount=self._round_size(stake), side=BUY, order_type=OrderType.FOK)
+        signed = client.create_market_order(order)
+        return client.post_order(signed, OrderType.FOK)
 
     def close_position_market(self, token_id: str, size: float) -> dict:
         """Close an open YES position with a FOK market sell."""

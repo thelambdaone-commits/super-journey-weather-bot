@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 
 GAMMA_HOST = "https://gamma-api.polymarket.com"
 CLOB_HOST = "https://clob.polymarket.com"
+
+# Centralized rate limiter for Polymarket APIs (Cloudflare sliding windows)
+from ..utils.rate_limiter import get_rate_limiter, rate_limited
+_rate_limiter = get_rate_limiter()
 STALE_TOKEN_TTL_SECONDS = 24 * 60 * 60
 STALE_TOKEN_FILE = Path("data/stale_clob_tokens.json")
 ORDERBOOK_SNAPSHOT_FILE = Path("data/orderbook_snapshots.jsonl")
@@ -22,6 +26,7 @@ TRANSIENT_CLOB_STATUS = {408, 425, 429, 500, 502, 503, 504}
 _stale_tokens: dict[str, float] | None = None
 
 
+@rate_limited(key="gamma_api", max_calls=60, window_seconds=60)
 def get_fee_rate(token_id: str = None, market_id: str = None, config = None) -> float:
     """
     Get fee rate from Polymarket API.
@@ -164,6 +169,7 @@ def mark_stale_token(token_id: str, now: float | None = None) -> None:
         logger.warning("CLOB token %s marked stale for 24h after HTTP 404", token)
 
 
+@rate_limited(key="clob_book", max_calls=30, window_seconds=60)
 def get_orderbook(token_id: str, market_id: str = None, max_attempts: int = 3, backoff_s: float = 0.25) -> Optional[Dict]:
     """Fetch the CLOB orderbook for one outcome token. Logs snapshot automatically."""
     token_id = str(token_id or "")

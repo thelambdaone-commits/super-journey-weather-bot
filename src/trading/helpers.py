@@ -41,7 +41,7 @@ def log_paper_trade(city: str, date_str: str, horizon: str, signal: dict) -> Non
         "forecast_temp": signal["forecast_temp"],
         "forecast_src": signal["forecast_src"],
         "ai": signal.get("ai"),
-        "status": "paper",
+        "status": signal.get("status", "open"),  # Use status from signal (should be "open")
     })
     path.write_text(json.dumps(trades, indent=2, ensure_ascii=False), encoding="utf-8")
 
