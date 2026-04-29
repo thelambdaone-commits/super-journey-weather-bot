@@ -61,7 +61,7 @@ class TradeDecision:
 
     def is_terminal(self) -> bool:
         """Decision reached a final state (no further action needed)."""
-        return self.action in ("BUY", "SKIP", "CANCEL")
+        return self.action in ("SKIP", "CANCEL")  # BUY is NOT terminal (order may be pending/partial)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSONL logging."""
@@ -97,9 +97,39 @@ class DecisionEngine:
 
     def __init__(self, config, filter_runner=None, edge_calculator=None, sizer=None):
         self.config = config
-        self.filter_runner = filter_runner
-        self.edge_calculator = edge_calculator
-        self.sizer = sizer
+        # Default to real implementations if not provided
+        if filter_runner is None:
+            from ..strategy.filters import run_all_filters
+            self.filter_runner = run_all_filters
+        else:
+            self.filter_runner = filter_runner
+            
+        if edge_calculator is None:
+            # Import pure functions from refactored edge.py
+            from ..strategy.edge import gross_edge, net_ev, estimate_fee, estimate_slippage
+            from dataclasses import dataclass
+            
+            @dataclass
+            class EdgeEst:
+                gross_edge: float
+                net_ev: float
+                
+            def edge_calc(prob, ask, bid, vol, size, orderbook):
+                fee = estimate_fee(ask, size, None)
+                slip = estimate_slippage(orderbook or {}, size)
+                net = net_ev(prob, ask, fee, slip)
+                gross = gross_edge(prob, ask)
+                return EdgeEst(gross_edge=gross, net_ev=net)
+            
+            self.edge_calculator = edge_calc
+        else:
+            self.edge_calculator = edge_calculator
+            
+        if sizer is None:
+            from ..strategy.sizing import final_position_size
+            self.sizer = final_position_size
+        else:
+            self.sizer = sizer
 
     def evaluate(self, context: Dict[str, Any]) -> TradeDecision:
         """
@@ -136,7 +166,14 @@ class DecisionEngine:
         # Run filters
         filter_result = {"passed": True, "rejected_reason": "", "filter_results": {}}
         if self.filter_runner:
+            # filter_runner is run_all_filters function
             filter_result = self.filter_runner(
+                outcome, features, orderbook, net, gross, self.config
+            )
+        else:
+            # Fallback: run_all_filters directly
+            from ..strategy.filters import run_all_filters
+            filter_result = run_all_filters(
                 outcome, features, orderbook, net, gross, self.config
             )
 

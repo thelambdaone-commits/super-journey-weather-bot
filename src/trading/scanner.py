@@ -45,6 +45,7 @@ from ..utils.feature_flags import is_enabled
 from ..data.moat_manager import get_moat
 from ..weather.collectors.open_meteo import MultiModelCollector
 from .idempotence import get_idempotence_manager
+from .decision import DecisionEngine
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ class MarketScanner:
         self.idempotence = get_idempotence_manager()
         self.moat = get_moat()
         self.multi_collector = MultiModelCollector(LOCATIONS)
+        # Decision engine for clean trade decisions
+        self.decision_engine = DecisionEngine(engine.config)
 
     def scan_and_update(self) -> ScanResult:
         """Run a full scan cycle."""
@@ -311,203 +314,76 @@ class MarketScanner:
                     opportunity = self.find_opportunity(city_slug, loc, snap, outcomes, hours, base_features, balance)
                     if opportunity:
                         outcome, probability_estimate, edge_estimate, features = opportunity
-                        signal = self.build_signal(
-                            outcome, probability_estimate, edge_estimate, features, 0.0, 0.0, forecast_temp, best_source
-                        )
-                        market.last_analysis = {
-                            "ev": signal["ev"],
-                            "price": signal["entry_price"],
-                            "conf": signal.get("ml", {}).get("confidence", 0),
-                            "ts": datetime.now(timezone.utc).isoformat(),
+                        
+                        # Build context for DecisionEngine
+                        context = {
+                            "outcome": outcome,
+                            "features": features,
+                            "orderbook": None,  # TODO: pass real orderbook
+                            "model_probability": probability_estimate.probability,
+                            "bankroll": balance,
+                            "event_slug": event_slug,
+                            "location": loc.name,
+                            "date": date_str,
                         }
-
-                        # Continue with trade sizing and filters
-                        sizing_max_bet = self._max_bet_for_mode()
-                        from ..strategy.sizing import final_position_size
-                        sizing_result = final_position_size(
-                            probability_estimate.probability,
-                            outcome["ask"],
-                            balance,
-                            self.engine.config,
+                        
+                        # Get decision from DecisionEngine
+                        decision = self.decision_engine.evaluate(context)
+                        
+                        # Log the decision
+                        self.engine.emit(
+                            f"[DECISION] {loc.name} {date_str} | "
+                            f"action={decision.action} | "
+                            f"net_ev={decision.net_ev:.4f} | "
+                            f"size={decision.suggested_size:.2f}"
                         )
-                        kelly = sizing_result.fractional_kelly
-                        size = sizing_result.final_size
-                        if self._paper_training_enabled() and 0 < size < getattr(
-                            self.engine.config, "paper_training_min_bet_usd", 1.0
-                        ):
-                            size = min(
-                                float(getattr(self.engine.config, "paper_training_min_bet_usd", 1.0)),
-                                sizing_max_bet,
-                            )
-
-                        # Micro-Live Cap: Override Kelly if in live mode
-                        if self.engine.config.live_trade:
-                            cap = getattr(self.engine.config, "max_live_bet_usd", 10.0)
-                            if size > cap:
-                                self.engine.emit(f"[MICRO-LIVE CAP] ${size:.2f} -> ${cap:.2f}")
-                                size = cap
-
-                        min_size = self._min_trade_size_for_mode()
-                        if size >= min_size:
+                        
+                        if decision.should_trade:
+                            # Execute the trade (simplified - reuse existing logic)
                             signal = self.build_signal(
                                 outcome,
                                 probability_estimate,
                                 edge_estimate,
                                 features,
-                                kelly,
-                                size,
+                                0.0,
+                                decision.suggested_size,
                                 forecast_temp,
                                 best_source,
                             )
-
-                            # Initialize flow control
-                            ai_ok = False
-                            signal_ok = False
-                            ai_review = None
-                            flagged = False
-                            quality_result = {"accepted": False, "score": 0.0}
-
-                            # FLUX 1: IA (indépendant)
-                            if getattr(self.engine.config, "ai_flow_enabled", True):
-                                ai_review, flagged = get_ai_trade_context(loc.name, snap, signal, unit=loc.unit)
-                                if ai_review:
-                                    signal["ai"] = ai_review
-
-                                if flagged:
-                                    # IA a flaggé
-                                    if getattr(self.engine.config, "ai_force_blocking", False):
-                                        # Comportement ancien: IA bloque tout
-                                        reason = ai_review.get("anomaly", {}).get("reason", "anomalie")
-                                        self.record_decision(
-                                            market,
-                                            loc,
-                                            snap,
-                                            features,
-                                            signal,
-                                            probability_estimate,
-                                            edge_estimate,
-                                            "SKIP",
-                                            "ai_flagged",
-                                            horizon,
-                                            outcome,
-                                        )
-                                        self.engine.emit(f"[AI-SKIP] {loc.name} {date_str} | {reason}")
-                                        continue
-                                    # Sinon, on continue vers le check des filtres IA
-
-                                if not flagged or getattr(self.engine.config, "ai_allow_low_confidence_high_ev", False):
-                                    if self._ai_filters_pass(signal, ai_review or {}):
-                                        ai_ok = True
-
-                            # FLUX 2: Signal Quality (indépendant)
-                            if getattr(self.engine.config, "signal_flow_enabled", True):
-                                sql_signal = Signal.from_dict(loc.name, signal)
-                                quality_result = self._validate_signal_for_mode(sql_signal, signal)
-                                self.engine.emit(f"[DEBUG] {loc.name}: quality_score={quality_result['score']:.2f} accepted={quality_result['accepted']}")
-
-                                if quality_result["accepted"]:
-                                    if self._signal_filters_pass(signal, quality_result):
-                                        signal_ok = True
-                                        self.engine.emit(f"[DEBUG] {loc.name}: signal_ok=True (filters passed)")
-                                    else:
-                                        self.engine.emit(f"[DEBUG] {loc.name}: signal_ok=False (filters failed) conf={signal.get('ml',{}).get('confidence',0):.2f} ev={signal.get('ev',0):.2f}")
-
-                            # EXÉCUTION: OR logic (si l'un des deux flux accepte)
-                            self.engine.emit(f"[DEBUG] {loc.name}: ai_ok={ai_ok} signal_ok={signal_ok} | pos={market.position is not None} | paper_state={market.paper_state is not None} | signal_state={market.signal_state is not None}")
-                            if ai_ok or signal_ok:
-                                if ai_ok and signal_ok:
-                                    source = "AI+SIGNAL"
-                                else:
-                                    source = "AI" if ai_ok else "SIGNAL"
-                                note = format_ai_note(signal.get("ai")) + format_ml_note(signal.get("ml"))
-
-                                # Vérification risque
-                                open_markets = self.engine.storage.load_all_markets()
-                                risk_check = self.engine.risk_manager.check_new_trade(
-                                    city_slug, signal["cost"], open_markets
-                                )
-                                self.engine.emit(f"[DEBUG] {loc.name}: risk_check={risk_check}")
-
-                                if not risk_check["allowed"]:
-                                    self.record_decision(
-                                        market,
-                                        loc,
-                                        snap,
-                                        features,
-                                        signal,
-                                        probability_estimate,
-                                        edge_estimate,
-                                        "SKIP",
-                                        risk_check["reason"],
-                                        horizon,
-                                        outcome,
-                                    )
-                                    self.engine.emit(f"[RISK-SKIP] {loc.name} {date_str} | {risk_check['reason']}")
-                                    continue
-
-                                # Exécuter le trade
-                                self.engine.emit(f"[DEBUG] {loc.name}: calling _execute_trade | paper_mode={self.engine.modes.paper_mode} | signal_mode={self.engine.modes.signal_mode}")
-                                balance, executed = self._execute_trade(
-                                    signal,
-                                    market,
-                                    loc,
-                                    date_str,
-                                    horizon,
-                                    unit_sym,
-                                    note,
-                                    source,
-                                    balance,
-                                    state,
-                                    result,
-                                    event_slug=event_slug,
-                                )
-                                self.engine.emit(f"[DEBUG] {loc.name}: executed={executed}")
-                                if executed:
-                                    self.record_decision(
-                                        market,
-                                        loc,
-                                        snap,
-                                        features,
-                                        signal,
-                                        probability_estimate,
-                                        edge_estimate,
-                                        "BUY",
-                                        "edge_positive",
-                                        horizon,
-                                        outcome,
-                                    )
-                                else:
-                                    self.record_decision(
-                                        market,
-                                        loc,
-                                        snap,
-                                        features,
-                                        signal,
-                                        probability_estimate,
-                                        edge_estimate,
-                                        "SKIP",
-                                        "duplicate_or_execution_failed",
-                                        horizon,
-                                        outcome,
-                                    )
-                            else:
-                                reason = "both_flows_rejected"
-                                if flagged:
-                                    reason = ai_review.get("anomaly", {}).get("reason", reason)
-                                self.record_decision(
-                                    market,
-                                    loc,
-                                    snap,
-                                    features,
-                                    signal,
-                                    probability_estimate,
-                                    edge_estimate,
-                                    "SKIP",
-                                    reason,
-                                    horizon,
-                                    outcome,
-                                )
-                                self.engine.emit(f"[DUAL-FILTER] {loc.name} {date_str} | {reason}")
+                            
+                            # Risk check
+                            open_markets = self.engine.storage.load_all_markets()
+                            risk_check = self.engine.risk_manager.check_new_trade(
+                                city_slug, signal["cost"], open_markets
+                            )
+                            
+                            if not risk_check["allowed"]:
+                                self.engine.emit(f"[RISK-SKIP] {loc.name} {date_str} | {risk_check['reason']}")
+                                continue
+                            
+                            # Execute (simplified - call existing _execute_trade)
+                            balance, executed = self._execute_trade(
+                                signal,
+                                market,
+                                loc,
+                                date_str,
+                                horizon,
+                                unit_sym,
+                                "",
+                                "DECISION_ENGINE",
+                                balance,
+                                state,
+                                result,
+                                event_slug=event_slug,
+                            )
+                            
+                            if executed:
+                                self.engine.emit(f"[EXECUTED] {loc.name} {date_str} | size={decision.suggested_size:.2f}")
+                        else:
+                            self.engine.emit(
+                                f"[SKIPPED] {loc.name} {date_str} | "
+                                f"reason={decision.rejected_reason}"
+                            )
 
                 self.engine.storage.save_market(market)
                 time.sleep(0.1)
