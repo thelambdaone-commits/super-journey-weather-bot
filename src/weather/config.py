@@ -19,19 +19,31 @@ except ImportError:
 
 @dataclass
 class Config:
-    """Central configuration for WeatherBot."""
-
-    # Trading
+    """Global configuration for WeatherBot."""
+    # Trading core
     balance: float = 10000.0
     max_bet: float = 20.0
     min_ev: float = 0.10
     max_price: float = 0.45
     min_volume: int = 500
-    min_hours: float = 2.0
-    max_hours: float = 72.0
+    min_hours: int = 2
+    max_hours: int = 72
     kelly_fraction: float = 0.25
     max_slippage: float = 0.03
     scan_interval: int = 3600
+
+    # New required config fields (original plan + additions)
+    min_edge: float = 0.06
+    max_spread: float = 0.05
+    max_position_pct: float = 0.02  # 2% bankroll per trade
+    max_market_exposure_pct: float = 0.05  # 5% max exposure per market
+    max_daily_drawdown: float = 0.05  # 5% daily drawdown limit
+    estimated_fee_bps: float = 10.0  # 10 bps = 0.1% fee
+    estimated_slippage_bps: float = 5.0  # 5 bps = 0.05% slippage
+    require_positive_net_ev: bool = True
+    min_orderbook_depth_usd: float = 100.0  # Min orderbook depth at ask price (point 3)
+    max_orders_per_minute: int = 10  # Live safety (point 7)
+    kill_switch_enabled: bool = False  # Global kill switch (point 7)
     calibration_min: int = 30
     paper_mode: bool = False
     live_trade: bool = False
@@ -49,7 +61,7 @@ class Config:
     signal_top_k: int = 3
 
     # Dual Flow Configuration
-    ai_flow_enabled: bool = True
+    ai_flow_enabled: bool = False
     ai_min_confidence: float = 0.50
     ai_max_ev_threshold: float = 2.0
     ai_allow_low_confidence_high_ev: bool = False
@@ -71,6 +83,15 @@ class Config:
     paper_training_min_quality_score: float = 0.25
     paper_training_max_bet_usd: float = 5.0
     paper_training_min_bet_usd: float = 1.0
+
+    # Surebet detection is passive by default: detect/log only, no multi-leg execution.
+    surebet_detection_enabled: bool = True
+    surebet_min_profit_pct: float = 0.01
+    surebet_fee_buffer_pct: float = 0.003
+    surebet_max_total_stake_usd: float = 50.0
+    surebet_min_liquidity_usd: float = 5.0
+    surebet_paper_execution_enabled: bool = True
+    surebet_live_execution_enabled: bool = False
 
     # Micro-Live Caps (hard limits - override Kelly)
     max_live_bet_usd: float = 10.0  # $10 per trade max for micro-live

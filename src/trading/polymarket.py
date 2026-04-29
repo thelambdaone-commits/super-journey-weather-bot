@@ -13,11 +13,65 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+GAMMA_HOST = "https://gamma-api.polymarket.com"
 CLOB_HOST = "https://clob.polymarket.com"
 STALE_TOKEN_TTL_SECONDS = 24 * 60 * 60
 STALE_TOKEN_FILE = Path("data/stale_clob_tokens.json")
+ORDERBOOK_SNAPSHOT_FILE = Path("data/orderbook_snapshots.jsonl")
 TRANSIENT_CLOB_STATUS = {408, 425, 429, 500, 502, 503, 504}
 _stale_tokens: dict[str, float] | None = None
+
+
+def get_fee_rate(token_id: str = None, market_id: str = None, config = None) -> float:
+    """
+    Get fee rate from Polymarket API.
+    Tries GET /fee-rate endpoint, falls back to config.estimated_fee_bps / 10000.
+    Returns fee as decimal (e.g., 0.001 = 0.1%).
+    """
+    try:
+        params = {}
+        if token_id:
+            params["token_id"] = token_id
+        elif market_id:
+            params["market"] = market_id
+        resp = requests.get(f"{GAMMA_HOST}/fee-rate", params=params, timeout=(3, 5))
+        if resp.ok:
+            data = resp.json()
+            rate = float(data.get("feeRate", data.get("fee_rate", 0))) / 10000.0 if "feeRate" in data or "fee_rate" in data else None
+            if rate is not None:
+                logger.debug(f"Fee rate from API: {rate:.4%}")
+                return rate
+    except (Exception,) as e:
+        logger.debug(f"Could not fetch fee-rate: {e}")
+
+    # Fallback to config
+    if config and hasattr(config, 'estimated_fee_bps'):
+        return config.estimated_fee_bps / 10000.0
+    return 0.001  # Default 0.1%
+
+
+def log_orderbook_snapshot(token_id: str, market_id: str, orderbook: dict) -> None:
+    """
+    Log full orderbook snapshot to JSONL for future backtesting.
+    Called every time we fetch an orderbook (point 2: start logging NOW).
+    """
+    if not orderbook or not token_id:
+        return
+    snapshot = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "token_id": str(token_id),
+        "market_id": str(market_id or ""),
+        "bids": orderbook.get("bids", []),
+        "asks": orderbook.get("asks", []),
+        "last_trade_price": orderbook.get("last_trade_price"),
+        "tick_size": orderbook.get("tick_size"),
+    }
+    try:
+        ORDERBOOK_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(ORDERBOOK_SNAPSHOT_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(snapshot) + "\n")
+    except (Exception,) as e:
+        logger.warning(f"Failed to log orderbook snapshot: {e}")
 
 
 def get_polymarket_event(city_slug: str, month: str, day: int, year: int) -> Optional[Dict]:
@@ -110,8 +164,8 @@ def mark_stale_token(token_id: str, now: float | None = None) -> None:
         logger.warning("CLOB token %s marked stale for 24h after HTTP 404", token)
 
 
-def get_orderbook(token_id: str, max_attempts: int = 3, backoff_s: float = 0.25) -> Optional[Dict]:
-    """Fetch the CLOB orderbook for one outcome token."""
+def get_orderbook(token_id: str, market_id: str = None, max_attempts: int = 3, backoff_s: float = 0.25) -> Optional[Dict]:
+    """Fetch the CLOB orderbook for one outcome token. Logs snapshot automatically."""
     token_id = str(token_id or "")
     if not token_id:
         return None
@@ -148,6 +202,8 @@ def get_orderbook(token_id: str, max_attempts: int = 3, backoff_s: float = 0.25)
             if not isinstance(data, dict):
                 logger.warning("CLOB book response for token %s was not a JSON object", token_id)
                 return None
+            # Log snapshot for future backtesting (point 2: start logging NOW)
+            log_orderbook_snapshot(token_id, market_id or "", data)
             return data
         except requests.RequestException as exc:
             if attempt < attempts:
@@ -224,7 +280,7 @@ def refresh_outcome_orderbook(outcome: Dict) -> bool:
     Trading decisions must use the YES token orderbook: best ask to buy, best bid
     to mark/exit, and ask-bid spread for liquidity/friction filters.
     """
-    book = get_orderbook(str(outcome.get("token_id") or ""))
+    book = get_orderbook(str(outcome.get("token_id") or ""), market_id=str(outcome.get("market_id") or ""))
     if not book:
         outcome["orderbook_status"] = "missing"
         return False

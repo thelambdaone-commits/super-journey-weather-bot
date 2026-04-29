@@ -38,6 +38,21 @@ logger = logging.getLogger(__name__)
 MONITOR_INTERVAL = 600
 
 
+def _signal_bucket(candidate: dict, trade_context: dict, signal: dict) -> str:
+    """Build a display bucket even when older pending candidates omit it."""
+    bucket = candidate.get("bucket") or trade_context.get("bucket") or signal.get("bucket")
+    if bucket:
+        return str(bucket)
+
+    low = signal.get("bucket_low")
+    high = signal.get("bucket_high")
+    if low is None or high is None:
+        return "N/A"
+
+    unit = trade_context.get("unit") or candidate.get("unit") or ""
+    return f"{low}-{high}{unit}"
+
+
 class TradingEngine:
     """Runtime engine for scans, storage and feedback."""
 
@@ -154,22 +169,33 @@ class TradingEngine:
 
         return True
 
+    def can_trade_live(self) -> tuple[bool, str]:
+        """
+        Check all preconditions for live trading.
+        Double lock: live_trade=true AND confirm_live_trading="I_ACCEPT_REAL_LOSS"
+        """
+        if not self.config.live_trade:
+            return False, "live_trade=false"
+        if self.config.kill_switch_enabled:
+            return False, "kill_switch_active"
+        if self.config.confirm_live_trading != "I_ACCEPT_REAL_LOSS":
+            return False, "missing_double_lock (need confirm_live_trading='I_ACCEPT_REAL_LOSS')"
+        readiness_error = self.executor.readiness_error()
+        if readiness_error:
+            return False, f"executor_not_ready: {readiness_error}"
+        return True, "ok"
+
     def run_forever(self) -> None:
         """Run the main engine loop."""
         import os
 
-        # LIVE TRADE GUARD - Double confirmation required
+        # LIVE TRADE GUARD - Enhanced double confirmation
         if self.modes.live_trade:
-            confirm_env = os.environ.get("LIVE_TRADE_CONFIRM", "").lower()
-            if confirm_env != "true":
-                self.emit("🚨 BLOCKED: LIVE_TRADE requires LIVE_TRADE_CONFIRM=true in .env")
-                self.emit("   Add to .env: LIVE_TRADE_CONFIRM=true")
-                self.emit("   This is a safety guard to prevent accidental live trading.")
-                return
-            readiness_error = self.executor.readiness_error()
-            if readiness_error:
-                self.emit(f"🚨 BLOCKED: CLOB executor is not ready: {readiness_error}")
-                self.emit("   Install py-clob-client and set POLYMARKET_PRIVATE_KEY before enabling live trading.")
+            allowed, reason = self.can_trade_live()
+            if not allowed:
+                self.emit(f"🚨 BLOCKED: Live trading disabled: {reason}")
+                self.emit("   Required: live_trade=true AND confirm_live_trading='I_ACCEPT_REAL_LOSS'")
+                self.emit("   Also ensure: kill_switch_enabled=false")
                 return
 
         self.emit(f"\n{'=' * 50}")
@@ -227,6 +253,14 @@ class TradingEngine:
                             self.latency_sum += time.time() - t0
                             self.latency_count += 1
 
+                            # Auto-resolve pending markets after scan
+                            try:
+                                resolve_result = self.resolver.auto_resolve_pending()
+                                if resolve_result["total"] > 0:
+                                    self.emit(f"Auto-resolved: {resolve_result['total']} markets")
+                            except (Exception,) as resolve_exc:
+                                logger.error(f"Auto-resolve error: {resolve_exc}")
+
                             state = self.storage.load_state()
                             self.emit(
                                 f" balance: ${state.balance:,.2f} | new: {result.new_trades} | "
@@ -281,11 +315,12 @@ class TradingEngine:
             signal = candidate["signal"]
             trade_context = dict(candidate["trade_context"])
             trade_context.update({"signal_score": ranked_item.score, "rank": ranked_item.rank})
+            bucket = _signal_bucket(candidate, trade_context, signal)
 
             self.feedback.notify_signal(
                 candidate["loc"].name,
                 candidate["date_str"],
-                candidate["bucket"],
+                bucket,
                 signal["entry_price"],
                 signal["ev"],
                 signal["cost"],
@@ -351,13 +386,14 @@ class TradingEngine:
         """Return status lines for CLI output."""
         state = self.storage.load_state()
         markets = self.storage.load_all_markets()
-        open_pos = [m for m in markets if m.position and m.position.get("status") == "open"]
+        open_live = [m for m in markets if m.position and m.position.get("status") == "open"]
+        open_paper = [m for m in markets if m.paper_position and m.paper_position.get("status") == "open"]
         resolved = [m for m in markets if m.status == "resolved" and m.pnl is not None]
         balance, start = state.balance, state.starting_balance
         ret = (balance - start) / start * 100 if start else 0
         wins = sum(1 for m in resolved if m.resolved_outcome == "win")
         losses = sum(1 for m in resolved if m.resolved_outcome == "loss")
-        total = len(open_pos) + len(resolved)
+        total = len(open_live) + len(open_paper) + len(resolved)
         wr = f"{wins / total * 100:.0f}%" if total else "0%"
 
         return [
@@ -366,7 +402,7 @@ class TradingEngine:
             f"{'=' * 50}",
             f"Balance: ${balance:,.2f} ({ret:+.1f}%)",
             f"Trades: {total} | W: {wins} | L: {losses} | WR: {wr}",
-            f"Open: {len(open_pos)} | Resolved: {len(resolved)}",
+            f"Open Live: {len(open_live)} | Open Paper: {len(open_paper)} | Resolved: {len(resolved)}",
             f"{'=' * 50}\n",
         ]
 

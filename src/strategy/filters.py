@@ -1,80 +1,196 @@
 """
-Strategy filters with stricter thresholds.
+Trading filters for market selection.
+
+Each filter returns:
+    {
+        "passed": bool,
+        "reason": str,
+        "metrics": dict
+    }
 """
 
-# Stricter thresholds for live trading
-MIN_EV = 0.04  # 4% minimum EV
-MAX_SPREAD = 0.07  # 7% maximum spread
-MIN_VOLUME = 300  # $300 minimum volume
-MIN_CONFIDENCE = 0.15  # 15% minimum confidence
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def should_skip_outcome(config, outcome: dict, features: dict, adjusted_ev: float) -> bool:
-    """Return True when the candidate market should be skipped."""
-    min_ev = float(getattr(config, "min_ev", MIN_EV))
-    max_spread = float(getattr(config, "max_slippage", MAX_SPREAD))
-    min_volume = float(getattr(config, "min_volume", MIN_VOLUME))
-    min_confidence = float(getattr(config, "min_confidence", MIN_CONFIDENCE))
-
-    # 1. Anti-Crossed Book Guard (Crucial for realistic Paper Trading)
-    bid = float(outcome.get("bid", 0.0))
-    ask = float(outcome.get("ask", 1.0))
-    if ask <= bid or ask < 0.01:  # Ignore prices below 1 cent (data errors)
-        return True
-
-    # 2. Volume filter (strict)
-    volume = float(outcome.get("volume", 0))
-    if volume > 0 and volume < min_volume:
-        return True
-
-    # 3. Price filter
-    if ask >= float(getattr(config, "max_price", 0.45)):
-        return True
-
-    # 4. Spread filter (strict)
-    spread = float(outcome.get("spread", 0.0))
-    if spread > max_spread:
-        return True
-
-    # 5. EV filter (strict)
-    if adjusted_ev < min_ev:
-        return True
-
-    # 6. Confidence filter
-    confidence = features.get("confidence")
-    if confidence is not None and float(confidence) < min_confidence:
-        return True
-
-    # 7. Volatility / Bucket Width Filter (Phase 1.2)
-    # Don't bet if the bucket is too narrow relative to the forecast uncertainty
-    sigma = features.get("sigma")
-    t_low, t_high = outcome.get("range", (0, 0))
-    if sigma is not None and t_low is not None and t_high is not None:
-        bucket_width = t_high - t_low
-        # If bucket is just a single degree, require sigma to be low
-        if bucket_width <= 1.0 and sigma > 1.5:
-            return True
-
-    # 8. Source Contradiction Filter (Phase 1.2)
-    # If GFS and ECMWF disagree significantly, avoid the market
-    ecmwf = features.get("ecmwf_max")
-    gfs = features.get("gfs_max")
-    if ecmwf is not None and gfs is not None:
-        diff = abs(float(ecmwf) - float(gfs))
-        if diff > 5.0:  # 5 degree threshold for high-uncertainty
-            return True
-
-    return False
+@dataclass
+class FilterResult:
+    """Result from a single filter check."""
+    passed: bool
+    reason: str
+    metrics: Dict[str, Any]
 
 
-def get_validation_report() -> dict:
-    """Get current validation thresholds."""
+class VolumeFilter:
+    """Filter markets by minimum volume."""
+
+    def __init__(self, min_volume: float):
+        self.min_volume = min_volume
+
+    def check(self, outcome: dict, config: Any = None) -> FilterResult:
+        volume = float(outcome.get("volume", 0))
+        passed = volume >= self.min_volume
+        return FilterResult(
+            passed=passed,
+            reason="" if passed else f"volume_too_low ({volume:.0f} < {self.min_volume})",
+            metrics={"volume": volume, "min_volume": self.min_volume},
+        )
+
+
+class SpreadFilter:
+    """Filter markets by maximum spread."""
+
+    def __init__(self, max_spread: float):
+        self.max_spread = max_spread
+
+    def check(self, outcome: dict, config: Any = None) -> FilterResult:
+        spread = float(outcome.get("spread", 0.0))
+        passed = spread <= self.max_spread
+        return FilterResult(
+            passed=passed,
+            reason="" if passed else f"spread_too_high ({spread:.1%} > {self.max_spread:.1%})",
+            metrics={"spread": spread, "max_spread": self.max_spread},
+        )
+
+
+class LiquidityFilter:
+    """Filter markets by orderbook depth at ask price (point 3)."""
+
+    def __init__(self, min_depth_usd: float):
+        self.min_depth_usd = min_depth_usd
+
+    def check(self, outcome: dict, orderbook: Optional[dict] = None, config: Any = None) -> FilterResult:
+        bid = float(outcome.get("bid", 0.0))
+        ask = float(outcome.get("ask", 1.0))
+        if ask <= bid or ask < 0.01:
+            return FilterResult(
+                passed=False,
+                reason="crossed_or_invalid_book",
+                metrics={"bid": bid, "ask": ask},
+            )
+        depth = self._depth_at_price(orderbook or outcome.get("orderbook"), ask) if orderbook else float(outcome.get("volume", 0))
+        passed = depth >= self.min_depth_usd
+        return FilterResult(
+            passed=passed,
+            reason="" if passed else f"depth_too_low ({depth:.1f} < {self.min_depth_usd})",
+            metrics={"depth_usd": depth, "min_depth_usd": self.min_depth_usd, "ask": ask},
+        )
+
+    def _depth_at_price(self, orderbook: dict, price: float) -> float:
+        """Calculate available liquidity at or better than price (for buys)."""
+        asks = orderbook.get("asks", [])
+        return sum(float(level[1]) * float(level[0]) for level in asks if float(level[0]) <= price + 1e-6)
+
+
+class EVFilter:
+    """Filter trades by minimum net EV."""
+
+    def __init__(self, min_edge: float, require_positive_net_ev: bool = True):
+        self.min_edge = min_edge
+        self.require_positive_net_ev = require_positive_net_ev
+
+    def check(self, net_ev: float, gross_edge: float, config: Any = None) -> FilterResult:
+        passed = gross_edge >= self.min_edge
+        if self.require_positive_net_ev:
+            passed = passed and net_ev > 0
+        reason = ""
+        if not passed:
+            if gross_edge < self.min_edge:
+                reason = f"edge_too_low ({gross_edge:.1%} < {self.min_edge:.1%})"
+            elif net_ev <= 0:
+                reason = f"net_ev_negative ({net_ev:.4f})"
+        return FilterResult(
+            passed=passed,
+            reason=reason,
+            metrics={"gross_edge": gross_edge, "net_ev": net_ev, "min_edge": self.min_edge},
+        )
+
+
+class AntiCrossedBookFilter:
+    """Reject crossed or invalid orderbooks."""
+
+    def check(self, outcome: dict, config: Any = None) -> FilterResult:
+        bid = float(outcome.get("bid", 0.0))
+        ask = float(outcome.get("ask", 1.0))
+        if ask <= bid:
+            return FilterResult(passed=False, reason="crossed_book", metrics={"bid": bid, "ask": ask})
+        if ask < 0.01:
+            return FilterResult(passed=False, reason="price_too_low", metrics={"ask": ask})
+        return FilterResult(passed=True, reason="", metrics={"bid": bid, "ask": ask})
+
+
+class ConfidenceFilter:
+    """Filter by minimum model confidence."""
+
+    def __init__(self, min_confidence: float = 0.15):
+        self.min_confidence = min_confidence
+
+    def check(self, features: dict, config: Any = None) -> FilterResult:
+        confidence = features.get("confidence")
+        if confidence is None:
+            return FilterResult(passed=True, reason="", metrics={"confidence": None})
+        passed = float(confidence) >= self.min_confidence
+        return FilterResult(
+            passed=passed,
+            reason="" if passed else f"confidence_too_low ({confidence:.1%} < {self.min_confidence:.1%})",
+            metrics={"confidence": confidence, "min_confidence": self.min_confidence},
+        )
+
+
+class SourceContradictionFilter:
+    """Skip when GFS and ECMWF disagree significantly."""
+
+    def check(self, features: dict, config: Any = None) -> FilterResult:
+        ecmwf = features.get("ecmwf_max")
+        gfs = features.get("gfs_max")
+        if ecmwf is not None and gfs is not None:
+            diff = abs(float(ecmwf) - float(gfs))
+            if diff > 5.0:
+                return FilterResult(
+                    passed=False,
+                    reason=f"source_contradiction (diff={diff:.1f}°C)",
+                    metrics={"ecmwf": ecmwf, "gfs": gfs, "diff": diff},
+                )
+        return FilterResult(passed=True, reason="", metrics={"ecmwf": ecmwf, "gfs": gfs})
+
+
+def run_all_filters(outcome: dict, features: dict, orderbook: Optional[dict],
+                    net_ev: float, gross_edge: float, config) -> Dict[str, Any]:
+    """Run all filters and return aggregated result."""
+    results = {}
+    filter_classes = [
+        ("anti_crossed", AntiCrossedBookFilter()),
+        ("volume", VolumeFilter(getattr(config, "min_volume", 500))),
+        ("spread", SpreadFilter(getattr(config, "max_spread", 0.05))),
+        ("liquidity", LiquidityFilter(getattr(config, "min_orderbook_depth_usd", 100.0))),
+        ("ev", EVFilter(getattr(config, "min_edge", 0.06), getattr(config, "require_positive_net_ev", True))),
+        ("confidence", ConfidenceFilter(getattr(config, "min_confidence", 0.15))),
+        ("source_contradiction", SourceContradictionFilter()),
+    ]
+    all_passed = True
+    reasons = []
+    for name, filt in filter_classes:
+        if isinstance(filt, LiquidityFilter):
+            res = filt.check(outcome, orderbook, config)
+        elif isinstance(filt, EVFilter):
+            res = filt.check(net_ev, gross_edge, config)
+        elif isinstance(filt, ConfidenceFilter):
+            res = filt.check(features, config)
+        elif isinstance(filt, SourceContradictionFilter):
+            res = filt.check(features, config)
+        else:
+            res = filt.check(outcome, config)
+        results[name] = res
+        if not res.passed:
+            all_passed = False
+            reasons.append(f"{name}: {res.reason}")
     return {
-        "min_ev": MIN_EV,
-        "max_spread": MAX_SPREAD,
-        "min_volume": MIN_VOLUME,
-        "min_confidence": MIN_CONFIDENCE,
+        "passed": all_passed,
+        "rejected_reason": "; ".join(reasons) if reasons else "",
+        "filter_results": results,
     }
-
-
-# Audit: Includes fee and slippage awareness
