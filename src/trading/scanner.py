@@ -330,6 +330,10 @@ class MarketScanner:
                         # Get decision from DecisionEngine
                         decision = self.decision_engine.evaluate(context)
                         
+                        # Log the decision to JSONL (all actions: BUY/SKIP/WAIT/REPRICE/CANCEL/REDUCE_SIZE)
+                        from .decision import log_decision_jsonl
+                        log_decision_jsonl(decision)
+                        
                         # Log the decision
                         self.engine.emit(
                             f"[DECISION] {loc.name} {date_str} | "
