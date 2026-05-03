@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 from datetime import datetime
+import logging
 
 
 @dataclass
@@ -144,10 +145,12 @@ class DecisionEngine:
         token_id = outcome.get("token_id", "")
 
         # Get bid/ask
-        bid = float(outcome.get("bid", 0.0))
-        ask = float(outcome.get("ask", 1.0))
+        bid = float(outcome.get("bid", outcome.get("best_bid", 0.0)) or 0.0)
+        ask = float(outcome.get("ask", outcome.get("best_ask", 0.0)) or 0.0)
         volume = float(outcome.get("volume", 0))
         spread = ask - bid if ask > bid else 0.0
+        filter_outcome = dict(outcome)
+        filter_outcome.update({"bid": bid, "ask": ask, "spread": spread})
 
         # Calculate edge
         if self.edge_calculator:
@@ -168,20 +171,25 @@ class DecisionEngine:
         if self.filter_runner:
             # filter_runner is run_all_filters function
             filter_result = self.filter_runner(
-                outcome, features, orderbook, net, gross, self.config
+                filter_outcome, features, orderbook, net, gross, self.config
             )
         else:
             # Fallback: run_all_filters directly
             from ..strategy.filters import run_all_filters
             filter_result = run_all_filters(
-                outcome, features, orderbook, net, gross, self.config
+                filter_outcome, features, orderbook, net, gross, self.config
             )
 
         # Sizing
         suggested_size = 0.0
         if filter_result["passed"] and self.sizer:
             sizing = self.sizer(
-                model_prob, ask, context.get("bankroll", 10000), self.config
+                model_prob,
+                ask,
+                context.get("bankroll", 10000),
+                self.config,
+                context.get("current_market_exposure", 0.0),
+                context.get("daily_pnl", 0.0),
             )
             suggested_size = sizing.final_size
         elif filter_result["passed"]:
@@ -199,7 +207,9 @@ class DecisionEngine:
                 action = "BUY"
             else:
                 action = "SKIP"
-                reason = "size_capped_to_zero"
+                reason = getattr(sizing, "reason", "size_capped_to_zero") if "sizing" in locals() else "size_capped_to_zero"
+        elif "depth_too_low" in reason:
+            action = "REDUCE_SIZE"
 
         return TradeDecision(
             market_id=market_id,
@@ -218,7 +228,7 @@ class DecisionEngine:
             suggested_size=suggested_size,
             action=action,
             passed_filters=filter_result["passed"],
-            rejected_reason=reason if not filter_result["passed"] else "",
+            rejected_reason="" if action == "BUY" else reason,
         )
 
 

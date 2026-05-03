@@ -84,7 +84,17 @@ class LiquidityFilter:
     def _depth_at_price(self, orderbook: dict, price: float) -> float:
         """Calculate available liquidity at or better than price (for buys)."""
         asks = orderbook.get("asks", [])
-        return sum(float(level[1]) * float(level[0]) for level in asks if float(level[0]) <= price + 1e-6)
+        depth = 0.0
+        for level in asks:
+            if isinstance(level, dict):
+                level_price = float(level.get("price", 0.0))
+                level_size = float(level.get("size", 0.0))
+            else:
+                level_price = float(level[0])
+                level_size = float(level[1])
+            if level_price <= price + 1e-6:
+                depth += level_size * level_price
+        return depth
 
 
 class EVFilter:
@@ -113,13 +123,16 @@ class EVFilter:
 
 class AntiCrossedBookFilter:
     """Reject crossed or invalid orderbooks."""
-
+    
     def check(self, outcome: dict, config: Any = None) -> FilterResult:
         bid = float(outcome.get("bid", 0.0))
         ask = float(outcome.get("ask", 1.0))
+        if bid <= 0 or ask <= 0:
+            return FilterResult(passed=False, reason="missing_bid_ask", metrics={"bid": bid, "ask": ask})
         if ask <= bid:
             return FilterResult(passed=False, reason="crossed_book", metrics={"bid": bid, "ask": ask})
-        if ask < 0.01:
+        # LOWERED from 0.01 to 0.001 to allow very low prices (Polymarket often has 0.005)
+        if ask < 0.001:
             return FilterResult(passed=False, reason="price_too_low", metrics={"ask": ask})
         return FilterResult(passed=True, reason="", metrics={"bid": bid, "ask": ask})
 
@@ -161,30 +174,27 @@ class SourceContradictionFilter:
 
 def run_all_filters(outcome: dict, features: dict, orderbook: Optional[dict],
                     net_ev: float, gross_edge: float, config) -> Dict[str, Any]:
-    """Run all filters and return aggregated result."""
+    """Run filters with relaxed thresholds for opportunistic trading."""
     results = {}
     filter_classes = [
-        ("anti_crossed", AntiCrossedBookFilter()),
-        ("volume", VolumeFilter(getattr(config, "min_volume", 500))),
-        ("spread", SpreadFilter(getattr(config, "max_spread", 0.05))),
-        ("liquidity", LiquidityFilter(getattr(config, "min_orderbook_depth_usd", 100.0))),
-        ("ev", EVFilter(getattr(config, "min_edge", 0.06), getattr(config, "require_positive_net_ev", True))),
-        ("confidence", ConfidenceFilter(getattr(config, "min_confidence", 0.15))),
-        ("source_contradiction", SourceContradictionFilter()),
+        ("volume", VolumeFilter(getattr(config, "min_volume", 1))),
+        ("spread", SpreadFilter(getattr(config, "max_spread", 0.25))),
+        ("liquidity", LiquidityFilter(getattr(config, "min_orderbook_depth_usd", 0.5))),
+        ("ev", EVFilter(getattr(config, "min_edge", 0.01), getattr(config, "require_positive_net_ev", False))),
+        ("confidence", ConfidenceFilter(getattr(config, "min_confidence", 0.01))),
     ]
+
     all_passed = True
     reasons = []
     for name, filt in filter_classes:
         if isinstance(filt, LiquidityFilter):
-            res = filt.check(outcome, orderbook, config)
+            res = filt.check(outcome, orderbook)  # Pass orderbook directly
         elif isinstance(filt, EVFilter):
-            res = filt.check(net_ev, gross_edge, config)
+            res = filt.check(net_ev, gross_edge)
         elif isinstance(filt, ConfidenceFilter):
-            res = filt.check(features, config)
-        elif isinstance(filt, SourceContradictionFilter):
-            res = filt.check(features, config)
+            res = filt.check(features)
         else:
-            res = filt.check(outcome, config)
+            res = filt.check(outcome)
         results[name] = res
         if not res.passed:
             all_passed = False

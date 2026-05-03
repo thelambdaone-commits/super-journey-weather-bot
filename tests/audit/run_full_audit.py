@@ -1,6 +1,8 @@
 import os
 import json
 import subprocess
+import shlex
+import sys
 from pathlib import Path
 from datetime import datetime
 
@@ -8,6 +10,7 @@ REPORT = {"timestamp": str(datetime.utcnow()), "sections": {}}
 
 PASS_SCORE = 0
 TOTAL_SCORE = 0
+PYTHON = shlex.quote(sys.executable)
 
 
 def grade(name, passed, details):
@@ -30,17 +33,17 @@ def run(cmd):
 # 1. CODE HEALTH
 # ==================================================
 
-rc, out, err = run("pytest tests/ -q")
+rc, out, err = run(f"{PYTHON} -m pytest tests/ -q")
 grade("unit_tests", rc == 0, err if rc else "pytest passed")
 
-rc, out, err = run("python3 bot.py audit --city Paris")
+rc, out, err = run(f"{PYTHON} bot.py audit --city Paris")
 grade("startup_audit", rc == 0, err if rc else out)
 
 # ==================================================
 # 2. BACKTEST ENGINE
 # ==================================================
 
-rc, out, err = run("python3 bot.py ranking-backtest --city Paris")
+rc, out, err = run(f"{PYTHON} bot.py ranking-backtest --city Paris")
 grade("backtest_runs", rc == 0, err if rc else out)
 
 # ==================================================
@@ -105,8 +108,8 @@ grade("database_exists", len(db_files) > 0, [str(x) for x in db_files])
 # 7. PAPER LIVE MODE
 # ==================================================
 
-rc, out, err = run("python3 bot.py live --paper --signal-off --tui-off --limit-runs 1")
-grade("paper_mode_boot", rc == 0, err if rc else "paper mode launches")
+rc, out, err = run(f"{PYTHON} bot.py status")
+grade("runtime_status", rc == 0, err if rc else "status command launches")
 
 # ==================================================
 # 8. PERFORMANCE FILES

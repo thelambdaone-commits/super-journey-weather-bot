@@ -2,12 +2,40 @@
 Storage - persistence layer for state and markets.
 """
 import json
+import logging
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """Cross-process advisory lock using a sidecar lock file."""
+    lock_path = Path(f"{path}.lock")
+    lock_path.parent.mkdir(exist_ok=True)
+    with open(lock_path, "a", encoding="utf-8") as lock_file:
+        fcntl_module = None
+        try:
+            import fcntl
+
+            fcntl_module = fcntl
+            fcntl_module.flock(lock_file.fileno(), fcntl_module.LOCK_EX)
+        except ImportError:
+            logger.debug("fcntl unavailable; file lock disabled for %s", path)
+        try:
+            yield
+        finally:
+            if fcntl_module is not None:
+                try:
+                    fcntl_module.flock(lock_file.fileno(), fcntl_module.LOCK_UN)
+                except OSError as unlock_exc:
+                    logger.warning("Failed to unlock %s: %s", path, unlock_exc)
 
 
 def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
@@ -26,8 +54,8 @@ def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
         # Clean up temp file on error
         try:
             os.unlink(tmp_path)
-        except (Exception,) as e:
-            pass
+        except (Exception,) as cleanup_exc:
+            logger.warning("Failed to remove temp file %s: %s", tmp_path, cleanup_exc)
         raise
 
 
@@ -61,6 +89,7 @@ class Market:
     actual_temp: Optional[float] = None
     resolved_outcome: Optional[str] = None  # win, loss
     pnl: Optional[float] = None
+    resolved_at: Optional[str] = None  # ISO timestamp when market was resolved
     signal_state: Optional[Dict] = None
     paper_state: Optional[Dict] = None
     last_analysis: Optional[Dict] = None
@@ -99,7 +128,8 @@ class Storage:
     def load_state(self) -> State:
         """Load bot state."""
         if self.state_file.exists():
-            data = json.loads(self.state_file.read_text(encoding="utf-8"))
+            with _file_lock(self.state_file):
+                data = json.loads(self.state_file.read_text(encoding="utf-8"))
             # Filter data to match State fields for backward compatibility
             import dataclasses
             fields = {f.name for f in dataclasses.fields(State)}
@@ -110,7 +140,8 @@ class Storage:
     def save_state(self, state: State):
         """Save bot state atomically."""
         content = json.dumps(asdict(state), indent=2, ensure_ascii=False)
-        _atomic_write(self.state_file, content, encoding="utf-8")
+        with _file_lock(self.state_file):
+            _atomic_write(self.state_file, content, encoding="utf-8")
     
     # === Markets ===
     def market_path(self, city: str, date: str) -> Path:
@@ -122,13 +153,14 @@ class Storage:
         path = self.market_path(city, date)
         if path.exists():
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                with _file_lock(path):
+                    data = json.loads(path.read_text(encoding="utf-8"))
                 import dataclasses
                 fields = {f.name for f in dataclasses.fields(Market)}
                 filtered = {k: v for k, v in data.items() if k in fields}
                 return Market(**filtered)
             except (Exception,) as e:
-                print(f"Error loading market {city}_{date}: {e}")
+                logger.warning("Error loading market %s_%s: %s", city, date, e)
                 return None
         return None
     
@@ -137,7 +169,8 @@ class Storage:
         path = self.market_path(market.city, market.date)
         data = asdict(market)
         content = json.dumps(data, indent=2, ensure_ascii=False)
-        _atomic_write(path, content, encoding="utf-8")
+        with _file_lock(path):
+            _atomic_write(path, content, encoding="utf-8")
     
     def load_all_markets(self) -> List[Market]:
         """Load all markets with field filtering."""
@@ -146,23 +179,26 @@ class Storage:
         markets = []
         for f in self.markets_dir.glob("*.json"):
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
+                with _file_lock(f):
+                    data = json.loads(f.read_text(encoding="utf-8"))
                 filtered = {k: v for k, v in data.items() if k in fields}
                 markets.append(Market(**filtered))
             except (Exception,) as e:
-                pass
+                logger.warning("Skipping unreadable market file %s: %s", f, e)
         return markets
     
     # === Calibration ===
     def load_calibration(self) -> Dict:
         """Load calibration data."""
         if self.calibration_file.exists():
-            return json.loads(self.calibration_file.read_text(encoding="utf-8"))
+            with _file_lock(self.calibration_file):
+                return json.loads(self.calibration_file.read_text(encoding="utf-8"))
         return {}
     
     def save_calibration(self, cal: Dict):
         """Save calibration data."""
-        self.calibration_file.write_text(json.dumps(cal, indent=2), encoding="utf-8")
+        with _file_lock(self.calibration_file):
+            _atomic_write(self.calibration_file, json.dumps(cal, indent=2), encoding="utf-8")
 
 
 # Global storage instance

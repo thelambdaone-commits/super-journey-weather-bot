@@ -20,7 +20,7 @@ except ImportError:
 from ..weather.config import get_config
 
 
-def get_groq_client() -> Optional[Groq]:
+def get_groq_client() -> Optional["Groq"]:
     """Initialize Groq client from environment."""
     if not GROQ_AVAILABLE:
         return None

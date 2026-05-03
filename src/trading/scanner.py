@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from ..weather.apis import get_forecasts
 from ..weather.locations import LOCATIONS, MONTHS
-from ..weather.math import bucket_prob, in_bucket
+from ..weather.math import bucket_prob
 from .polymarket import (
     get_polymarket_event,
     get_outcomes,
@@ -31,16 +31,15 @@ from .helpers import (
     format_ml_note,
     get_ai_trade_context,
 )
-from .polymarket import get_vwap_for_size
-from src.notifications.telegram_control_center import send_no_trade
-from src.notifications.desk_metrics import log_event
+from ..notifications.telegram_control_center import send_no_trade
+from ..notifications.desk_metrics import log_event
 from .types import ScanResult
 
 if TYPE_CHECKING:
     from .engine import TradingEngine
 
 from ..strategy.signal_quality import Signal
-from ..strategy.surebet import detect_surebet
+from ..strategy.surebet import detect_surebet, has_exhaustive_temperature_coverage
 from ..utils.feature_flags import is_enabled
 from ..data.moat_manager import get_moat
 from ..weather.collectors.open_meteo import MultiModelCollector
@@ -60,9 +59,15 @@ class MarketScanner:
         self.multi_collector = MultiModelCollector(LOCATIONS)
         # Decision engine for clean trade decisions
         self.decision_engine = DecisionEngine(engine.config)
+        self._orderbook_cache: dict[str, dict | None] = {}
+        self._clob_requests_used = 0
+        self._ai_reviews_used = 0
 
     def scan_and_update(self) -> ScanResult:
         """Run a full scan cycle."""
+        self._orderbook_cache = {}
+        self._clob_requests_used = 0
+        self._ai_reviews_used = 0
         now = datetime.now(timezone.utc)
         state = self.engine.storage.load_state()
         balance = state.balance
@@ -76,6 +81,7 @@ class MarketScanner:
                 self.moat.save_forecasts(forecasts_df)
             except (Exception,) as e:
                 logger.error(f"V3 Moat collection failed: {e}")
+                logger.exception("V3 Moat collection traceback:")
 
         for city_slug, loc in LOCATIONS.items():
             self.engine.emit(f" -> {loc.name}...")
@@ -113,56 +119,6 @@ class MarketScanner:
                     continue
 
                 outcomes = get_outcomes(event)
-                for outcome in outcomes:
-                    # CLOB guard for paper mode
-                    if self.engine.modes.live_trade:
-                        if not refresh_outcome_orderbook(outcome):
-                            continue
-                    else:
-                        self.engine.emit("[PAPER] skipped CLOB refresh, using Gamma prices")
-
-                    # Safety check bid/ask
-                    bid = float(outcome.get("best_bid", 0) or 0)
-                    ask = float(outcome.get("best_ask", 0) or 0)
-
-                    if bid <= 0 or ask <= 0:
-                        self.engine.emit(f"[NO-LIQUIDITY] {loc.name}")
-                        continue
-
-                    # Filter 2: Maximum spread (corrected formula)
-                    spread = (ask - bid) / ((ask + bid) / 2)
-                    max_spread = getattr(self.engine.config, "max_spread", 0.05)
-
-                    if spread > max_spread:
-                        self.engine.emit(
-                            f"[HIGH-SPREAD] {loc.name} | Spread: {spread:.2%} > {max_spread:.0%}"
-                        )
-                        continue
-
-                    best_ask = ask
-                    orderbook = {"asks": [{"price": outcome["ask"], "size": outcome.get("best_ask_size", 0.0)}]}
-                    vwap_ask = get_vwap_for_size(orderbook, target_usd=100.0, side="ask")
-                    tick_size = 0.01
-
-                    # Save to Moat
-                    self.moat.save_quote(
-                        event["id"],
-                        city_slug,
-                        float(outcome["bid"]),
-                        best_ask,
-                        vwap_ask,
-                        outcome["spread"],
-                        5000.0,
-                        tick_size,
-                    )
-
-                    signal_dict = {
-                        "market_id": event["id"],
-                        "question": event.get("question", ""),
-                        "best_ask": best_ask,
-                        "vwap_ask": vwap_ask,
-                        "spread": outcome["spread"],
-                    }
 
                 end_date = event.get("endDate", "")
                 hours = hours_to_resolution(end_date) if end_date else 0
@@ -191,15 +147,20 @@ class MarketScanner:
                 outcomes = get_outcomes(event)
                 if getattr(self.engine.config, "surebet_detection_enabled", True):
                     surebet_outcomes = []
-                    for outcome in outcomes:
-                        if refresh_outcome_orderbook(outcome):
-                            surebet_outcomes.append(outcome)
-                    surebet = detect_surebet(
-                        surebet_outcomes,
-                        max_total_stake=float(getattr(self.engine.config, "surebet_max_total_stake_usd", 50.0)),
-                        min_profit_pct=float(getattr(self.engine.config, "surebet_min_profit_pct", 0.01)),
-                        fee_buffer_pct=float(getattr(self.engine.config, "surebet_fee_buffer_pct", 0.003)),
-                        min_liquidity_usd=float(getattr(self.engine.config, "surebet_min_liquidity_usd", 5.0)),
+                    if self._surebet_prefilter_passes(outcomes):
+                        for outcome in outcomes:
+                            if self._refresh_outcome_orderbook(outcome):
+                                surebet_outcomes.append(outcome)
+                    surebet = (
+                        detect_surebet(
+                            surebet_outcomes,
+                            max_total_stake=float(getattr(self.engine.config, "surebet_max_total_stake_usd", 50.0)),
+                            min_profit_pct=float(getattr(self.engine.config, "surebet_min_profit_pct", 0.01)),
+                            fee_buffer_pct=float(getattr(self.engine.config, "surebet_fee_buffer_pct", 0.003)),
+                            min_liquidity_usd=float(getattr(self.engine.config, "surebet_min_liquidity_usd", 5.0)),
+                        )
+                        if surebet_outcomes
+                        else None
                     )
                     if surebet:
                         self.engine.emit(
@@ -258,7 +219,7 @@ class MarketScanner:
                     current_price = None
                     for outcome in outcomes:
                         if outcome["market_id"] == pos["market_id"]:
-                            if refresh_outcome_orderbook(outcome):
+                            if self._refresh_outcome_orderbook(outcome):
                                 current_price = outcome.get("bid", outcome["price"])
                             break
 
@@ -311,82 +272,121 @@ class MarketScanner:
                     (market.paper_position and market.paper_position.get("status") == "open")
                 )
                 if not has_open_position and forecast_temp is not None and hours >= self.engine.config.min_hours:
-                    opportunity = self.find_opportunity(city_slug, loc, snap, outcomes, hours, base_features, balance)
-                    if opportunity:
-                        outcome, probability_estimate, edge_estimate, features = opportunity
-                        
-                        # Build context for DecisionEngine
-                        context = {
-                            "outcome": outcome,
+                    # NEW: Score ALL buckets using range probability engine
+                    opportunities = self.find_all_opportunities(
+                        city_slug, loc, snap, outcomes, hours, base_features, balance
+                    )
+
+                    # Iterate through opportunities (sorted by edge, highest first)
+                    for opp in opportunities:
+                        outcome = opp["outcome"]
+                        prob_model = opp["prob"]
+                        market_price = opp["price"]
+                        edge = opp["edge"]
+                        ev = opp["ev"]
+                        size = opp["size"]
+                        bucket = opp["bucket"]
+                        sigma = opp.get("sigma", 2.0)
+                        features = opp.get("features", {})
+
+                        # Build signal
+                        from src.weather.math import bucket_prob
+                        adjusted_temp = float(forecast_temp) - features.get("bias", 0.0)
+                        signal = {
+                            "market_id": outcome["market_id"],
+                            "token_id": outcome.get("token_id"),
+                            "question": outcome["question"],
+                            "bucket_low": outcome["range"][0],
+                            "bucket_high": outcome["range"][1],
+                            "entry_price": market_price,
+                            "bid_at_entry": outcome.get("bid", market_price),
+                            "spread": outcome.get("spread", 0.05),
+                            "shares": round(size / market_price, 2) if market_price > 0 else 0,
+                            "cost": size,
+                            "best_ask_size_usd": float(outcome.get("best_ask_size", 0.0)) * market_price,
+                            "raw_prob": round(bucket_prob(adjusted_temp, outcome["range"][0], outcome["range"][1], sigma), 4),
+                            "p": round(prob_model, 4),
+                            "ev": round(ev, 4),
+                            "raw_ev": round(edge, 4),
+                            "edge_penalties": {"source_bias": 0.0, "low_confidence": 0.0, "low_volume": 0.0},
+                            "kelly": round(size / balance, 4) if balance > 0 else 0,
+                            "forecast_temp": adjusted_temp,
+                            "raw_forecast_temp": forecast_temp,
+                            "forecast_src": best_source or "ecmwf",
+                            "sigma": sigma,
+                            "ml": {
+                                "adjusted_temp": adjusted_temp,
+                                "sigma": sigma,
+                                "confidence": features.get("confidence", 0.5),
+                                "bias": features.get("bias", 0.0),
+                                "mae": features.get("mae", 1.5),
+                                "n": features.get("n", 0),
+                                "tier": features.get("tier", "default"),
+                                "features": features,
+                            },
                             "features": features,
-                            "orderbook": None,  # TODO: pass real orderbook
-                            "model_probability": probability_estimate.probability,
-                            "bankroll": balance,
-                            "event_slug": event_slug,
-                            "location": loc.name,
-                            "date": date_str,
+                            "opened_at": datetime.now(timezone.utc).isoformat(),
+                            "status": "open",
                         }
-                        
-                        # Get decision from DecisionEngine
-                        decision = self.decision_engine.evaluate(context)
-                        
-                        # Log the decision to JSONL (all actions: BUY/SKIP/WAIT/REPRICE/CANCEL/REDUCE_SIZE)
-                        from .decision import log_decision_jsonl
-                        log_decision_jsonl(decision)
-                        
-                        # Log the decision
-                        self.engine.emit(
-                            f"[DECISION] {loc.name} {date_str} | "
-                            f"action={decision.action} | "
-                            f"net_ev={decision.net_ev:.4f} | "
-                            f"size={decision.suggested_size:.2f}"
+
+                        # Risk check
+                        open_markets = self.engine.storage.load_all_markets()
+                        risk_check = self.engine.risk_manager.check_new_trade(
+                            city_slug, signal["cost"], open_markets
                         )
-                        
-                        if decision.should_trade:
-                            # Execute the trade (simplified - reuse existing logic)
-                            signal = self.build_signal(
-                                outcome,
-                                probability_estimate,
-                                edge_estimate,
-                                features,
-                                0.0,
-                                decision.suggested_size,
-                                forecast_temp,
-                                best_source,
+
+                        if not risk_check["allowed"]:
+                            self.engine.emit(f"[RISK-SKIP] {loc.name} {date_str} | {risk_check['reason']}")
+                            continue
+
+                        ai_note = ""
+                        ai_result = self._review_signal_with_ai(loc, snap, signal, unit_sym)
+                        if not ai_result["allowed"]:
+                            self.engine.emit(f"[AI-SKIP] {loc.name} {date_str} | {ai_result['reason']}")
+                            self._log_rejection(
+                                city_slug,
+                                outcome.get("question", ""),
+                                bucket,
+                                prob_model,
+                                market_price,
+                                edge,
+                                f"ai_rejected:{ai_result['reason']}",
                             )
-                            
-                            # Risk check
-                            open_markets = self.engine.storage.load_all_markets()
-                            risk_check = self.engine.risk_manager.check_new_trade(
-                                city_slug, signal["cost"], open_markets
+                            continue
+                        if ai_result.get("review"):
+                            signal["ai"] = ai_result["review"]
+                            ai_note = format_ai_note(ai_result["review"])
+
+                        # Execute the trade
+                        balance, executed = self._execute_trade(
+                            signal,
+                            market,
+                            loc,
+                            date_str,
+                            horizon,
+                            unit_sym,
+                            "\n".join(part for part in [f"edge={edge:.2%}", ai_note] if part),
+                            "RANGE_PROBABILITY_ENGINE",
+                            balance,
+                            state,
+                            result,
+                            event_slug=event_slug,
+                        )
+
+                        if executed:
+                            self.engine.emit(
+                                f"[EXECUTED] {loc.name} {date_str} | "
+                                f"bucket={bucket} | "
+                                f"size=${size:.2f} | "
+                                f"edge={edge:.2%}"
                             )
-                            
-                            if not risk_check["allowed"]:
-                                self.engine.emit(f"[RISK-SKIP] {loc.name} {date_str} | {risk_check['reason']}")
-                                continue
-                            
-                            # Execute (simplified - call existing _execute_trade)
-                            balance, executed = self._execute_trade(
-                                signal,
-                                market,
-                                loc,
-                                date_str,
-                                horizon,
-                                unit_sym,
-                                "",
-                                "DECISION_ENGINE",
-                                balance,
-                                state,
-                                result,
-                                event_slug=event_slug,
-                            )
-                            
-                            if executed:
-                                self.engine.emit(f"[EXECUTED] {loc.name} {date_str} | size={decision.suggested_size:.2f}")
+                            # Only execute the best opportunity per city/date
+                            break
                         else:
                             self.engine.emit(
                                 f"[SKIPPED] {loc.name} {date_str} | "
-                                f"reason={decision.rejected_reason}"
+                                f"bucket={bucket} | "
+                                f"reason=execution_failed"
                             )
 
                 self.engine.storage.save_market(market)
@@ -401,6 +401,54 @@ class MarketScanner:
             self.engine.storage.save_state(state)
 
         return result
+
+    def _refresh_outcome_orderbook(self, outcome: dict) -> bool:
+        """Refresh CLOB orderbook with per-scan cache and request budget."""
+        token_id = str(outcome.get("token_id") or "")
+        if not token_id:
+            outcome["orderbook_status"] = "missing_token"
+            return False
+
+        if token_id in self._orderbook_cache:
+            cached = self._orderbook_cache[token_id]
+            if cached is None:
+                outcome["orderbook_status"] = "cached_missing"
+                return False
+            outcome.update(copy(cached))
+            return True
+
+        max_requests = int(getattr(self.engine.config, "max_clob_requests_per_scan", 30))
+        if self._clob_requests_used >= max_requests:
+            outcome["orderbook_status"] = "budget_exhausted"
+            return False
+
+        self._clob_requests_used += 1
+        if not refresh_outcome_orderbook(outcome):
+            self._orderbook_cache[token_id] = None
+            return False
+
+        self._orderbook_cache[token_id] = copy(outcome)
+        return True
+
+    def _surebet_prefilter_passes(self, outcomes: list[dict]) -> bool:
+        """Use free Gamma prices to avoid expensive full CLOB surebet scans."""
+        if len(outcomes) < 2 or not has_exhaustive_temperature_coverage(outcomes):
+            return False
+
+        try:
+            implied_sum = sum(float(outcome.get("ask") or 0.0) for outcome in outcomes)
+        except (TypeError, ValueError):
+            return False
+
+        min_profit = float(getattr(self.engine.config, "surebet_min_profit_pct", 0.01))
+        fee_buffer = float(getattr(self.engine.config, "surebet_fee_buffer_pct", 0.003))
+        margin = float(getattr(self.engine.config, "surebet_prefilter_margin", 0.0))
+        threshold = 1.0 - min_profit - fee_buffer + margin
+        if implied_sum >= threshold:
+            return False
+
+        max_requests = int(getattr(self.engine.config, "max_clob_requests_per_scan", 30))
+        return self._clob_requests_used + len(outcomes) <= max_requests
 
     def _surebet_position(self, surebet, loc, date_str: str, mode: str, execution: dict | None = None) -> dict:
         legs = [
@@ -480,43 +528,187 @@ class MarketScanner:
 
         return balance, False
 
-    def find_opportunity(self, city_slug, loc, snap, outcomes, hours, base_features, balance):
-        """Find the best tradeable outcome in a market."""
+    def _calculate_dynamic_sigma(self, snap: dict, base_sigma: float = 2.0) -> float:
+        """
+        Calculate dynamic sigma based on model divergence.
+        When ECMWF and GFS disagree, increase uncertainty (opportunity!).
+        """
+        ecmwf = snap.get("ecmwf")
+        gfs = snap.get("gfs")
+        hrrr = snap.get("hrrr")
+
+        sigma = base_sigma
+
+        if ecmwf is not None and gfs is not None:
+            diff = abs(float(ecmwf) - float(gfs))
+            if diff > 3.0:
+                # Increase sigma when models diverge - market underestimates uncertainty
+                sigma *= (1.0 + diff / 10.0)
+
+        if ecmwf is not None and hrrr is not None:
+            diff = abs(float(ecmwf) - float(hrrr))
+            if diff > 4.0:
+                sigma *= (1.0 + diff / 15.0)
+
+        return max(base_sigma, sigma)
+
+    def find_all_opportunities(self, city_slug, loc, snap, outcomes, hours, base_features, balance):
+        """
+        Score ALL buckets using range probability engine.
+        This is the core of the pricing engine transformation.
+        """
+        from src.strategy.range_probability import calculate_all_bucket_probs, find_best_edge
+
         forecast_temp = snap.get("best")
-        best_source = snap.get("best_source")
+        if forecast_temp is None:
+            return []
 
-        best = None
-        for candidate in outcomes:
-            t_low, t_high = candidate["range"]
-            estimate = self.engine.probability_engine.estimate_bucket(
-                city_slug, best_source, forecast_temp, loc.unit, t_low, t_high
-            )
-            if not in_bucket(estimate.adjusted_temp, t_low, t_high):
+        # Dynamic sigma based on model divergence
+        base_sigma = 2.0 if loc.unit == "C" else 3.6
+        sigma = self._calculate_dynamic_sigma(snap, base_sigma)
+
+        # Calculate probabilities for ALL buckets
+        all_probs = calculate_all_bucket_probs(float(forecast_temp), sigma, outcomes)
+
+        opportunities = []
+        min_edge = getattr(self.engine.config, "min_edge", 0.015)
+
+        for item in all_probs:
+            if item["edge_brut"] <= min_edge:
                 continue
 
-            if not refresh_outcome_orderbook(candidate):
+            outcome = item["outcome"]
+            prob_model = item["prob_model"]
+            market_price = item["price_market"]
+            edge = item["edge_brut"]
+
+            # Refresh orderbook for executable prices
+            if not self._refresh_outcome_orderbook(outcome):
                 continue
 
+            # Build features for this candidate
             candidate_features = dict(base_features)
-            candidate_features.update(self.engine.feature_engine.build(loc, snap, outcomes, hours, candidate))
-            candidate_features["confidence"] = estimate.confidence
-            candidate_features["sigma"] = estimate.sigma
-            volume = candidate.get("volume", 0)
-            current_edge = self.engine.edge_engine.compute(
-                estimate.probability, candidate["ask"], candidate_features, best_source, volume
+            candidate_features.update(
+                self.engine.feature_engine.build(loc, snap, outcomes, hours, outcome)
+            )
+            candidate_features["confidence"] = min(1.0, max(0.0, 1.0 - (sigma / 10.0)))
+            candidate_features["sigma"] = sigma
+
+            # Calculate EV with proper fee/slippage estimation
+            volume = float(outcome.get("volume", 0))
+            from src.strategy.edge import gross_edge, net_ev, estimate_fee, estimate_slippage
+
+            fee = estimate_fee(market_price, 10.0, self.engine.config)  # Estimate on $10 size
+            slippage = estimate_slippage(outcome.get("orderbook", {}), 10.0)
+            ev = net_ev(prob_model, market_price, fee, slippage)
+
+            # Run filters (relaxed)
+            filter_result = run_all_filters(
+                outcome,
+                candidate_features,
+                outcome.get("orderbook"),
+                ev,
+                edge,
+                self._filter_config_for_mode(),
             )
 
-            # Check should skip with stricter filters
-            if should_skip_outcome(
-                self._filter_config_for_mode(), candidate, candidate_features, current_edge.adjusted_ev
-            ):
-                if current_edge.raw_ev > 0.05:
-                    send_no_trade(city_slug, [f"Edge too small ({current_edge.raw_ev:+.1%})", "Filter rejection"])
+            if not filter_result["passed"]:
+                # Log rejection
+                self._log_rejection(
+                    city_slug,
+                    outcome.get("question", ""),
+                    item["bucket"],
+                    prob_model,
+                    market_price,
+                    edge,
+                    filter_result.get("rejected_reason", "unknown")
+                )
                 continue
 
-            if best is None or current_edge.adjusted_ev > best[2].adjusted_ev:
-                best = (candidate, estimate, current_edge, candidate_features)
-        return best
+            # Run Signal Quality Layer validation
+            signal = Signal.from_dict(city_slug, {
+                "market_id": outcome["market_id"],
+                "entry_price": market_price,
+                "ev": ev,
+                "p": prob_model,
+                "spread": outcome.get("spread", 0.05),
+                "best_ask": outcome.get("ask", market_price),
+                "vwap_ask": outcome.get("vwap_ask", outcome.get("ask", market_price)),
+                "ml": {
+                    "confidence": candidate_features.get("confidence", 0.5),
+                    "mae": candidate_features.get("mae", 1.5),
+                },
+                "features": candidate_features,
+            })
+            quality_result = self.engine.signal_quality.validate(signal)
+            if not quality_result["accepted"]:
+                self._log_rejection(
+                    city_slug,
+                    outcome.get("question", ""),
+                    item["bucket"],
+                    prob_model,
+                    market_price,
+                    edge,
+                    f"quality_rejected:{quality_result.get('reason', 'unknown')}"
+                )
+                continue
+
+            # Calculate position size using Kelly
+            from src.strategy.sizing import kelly_fraction_binary, fractional_kelly, cap_position_size
+
+            kelly_frac = kelly_fraction_binary(prob_model, market_price)
+            frac_kelly = fractional_kelly(prob_model, market_price, self.engine.config.kelly_fraction)
+            raw_size = frac_kelly * balance
+
+            # Cap the size
+            capped_size = cap_position_size(
+                raw_size,
+                balance,
+                getattr(self.engine.config, "max_position_pct", 0.02),
+                getattr(self.engine.config, "max_market_exposure_pct", 0.05)
+            )
+            final_size = max(0.0, capped_size)
+
+            if final_size < 0.50:
+                continue
+
+            opportunities.append({
+                "outcome": outcome,
+                "prob": prob_model,
+                "price": market_price,
+                "edge": edge,
+                "ev": ev,
+                "size": final_size,
+                "bucket": item["bucket"],
+                "sigma": sigma,
+                "features": candidate_features
+            })
+
+        return sorted(opportunities, key=lambda x: x["edge"], reverse=True)
+
+    def _log_rejection(self, city, question, bucket, model_prob, market_price, edge, reason):
+        """Log EVERY rejection for analysis."""
+        import json
+        from pathlib import Path
+        from datetime import datetime
+
+        log_path = Path("logs/rejections.jsonl")
+        log_path.parent.mkdir(exist_ok=True)
+
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "ts": datetime.utcnow().isoformat(),
+                    "city": city,
+                    "question": question,
+                    "bucket": bucket,
+                    "model_prob": round(model_prob, 4),
+                    "market_price": round(market_price, 4),
+                    "edge": round(edge, 4),
+                    "reason": reason
+                }) + "\n")
+        except (Exception,) as e:
+            logging.getLogger(__name__).warning(f"Failed to log rejection: {e}")
 
     def build_signal(self, outcome, estimate, edge, features, kelly, size, forecast_temp, best_source):
         """Build a signal dictionary."""
@@ -552,9 +744,6 @@ class MarketScanner:
                 "mae": estimate.mae,
                 "n": estimate.n,
                 "tier": estimate.tier,
-                "mae": estimate.mae,
-                "n": estimate.n,
-                "tier": estimate.tier,
                 "features": features,  # Reference features directly
             },
             "features": features,
@@ -577,6 +766,52 @@ class MarketScanner:
 
         return True
 
+    def _review_signal_with_ai(self, loc, snap: dict, signal: dict, unit_sym: str) -> dict:
+        """Optionally review a candidate with Groq after deterministic filters pass."""
+        config = self.engine.config
+        if not getattr(config, "ai_flow_enabled", False):
+            return {"allowed": True, "reason": "ai_disabled", "review": None}
+
+        max_reviews = int(getattr(config, "ai_max_reviews_per_scan", 5))
+        if self._ai_reviews_used >= max_reviews:
+            if getattr(config, "ai_force_blocking", False):
+                return {"allowed": False, "reason": "ai_budget_exhausted", "review": None}
+            return {"allowed": True, "reason": "ai_budget_exhausted_nonblocking", "review": None}
+
+        self._ai_reviews_used += 1
+        unit = "F" if unit_sym == "°F" else "C"
+        review, is_anomaly = get_ai_trade_context(loc.name, snap, signal, unit=unit)
+        if review is None:
+            if getattr(config, "ai_force_blocking", False):
+                return {"allowed": False, "reason": "ai_unavailable", "review": None}
+            return {"allowed": True, "reason": "ai_unavailable_nonblocking", "review": None}
+
+        if is_anomaly:
+            return {"allowed": False, "reason": "ai_anomaly", "review": review}
+
+        if not self._ai_filters_pass(signal, review):
+            return {"allowed": False, "reason": "ai_filter_failed", "review": review}
+
+        return {"allowed": True, "reason": "ai_ok", "review": review}
+
+    def _paper_signal_context(self) -> dict:
+        """Return current reconciled paper accounting for signal notifications."""
+        if not hasattr(self.engine.paper_account, "get_state"):
+            return {}
+        state = self.engine.paper_account.get_state()
+        return {
+            "paper_status": "PAPER_ONLY",
+            "paper_balance": getattr(state, "balance", 0.0),
+            "paper_equity": getattr(state, "equity", getattr(state, "balance", 0.0)),
+            "paper_cash_pnl": getattr(state, "cash_pnl", 0.0),
+            "paper_total_pnl": getattr(state, "total_pnl", 0.0),
+            "paper_total_gains": getattr(state, "total_gains", 0.0),
+            "paper_total_losses": getattr(state, "total_losses", 0.0),
+            "paper_open_exposure": getattr(state, "locked_in_positions", 0.0),
+            "paper_closed_trades": getattr(state, "closed_trades", getattr(state, "wins", 0) + getattr(state, "losses", 0)),
+            "paper_open_trades": getattr(state, "open_trades", 0),
+        }
+
     def _signal_filters_pass(self, signal: dict, quality_result: dict) -> bool:
         """Check if signal passes Signal flow filters."""
         config = self.engine.config
@@ -586,10 +821,11 @@ class MarketScanner:
             if paper_training
             else getattr(config, "signal_min_quality_score", 0.40)
         )
+        # Align with SignalQualityLayer.MIN_CONFIDENCE (0.50)
         min_confidence = (
             getattr(config, "paper_training_min_confidence", 0.25)
             if paper_training
-            else getattr(config, "signal_min_confidence", 0.30)
+            else getattr(config, "signal_min_confidence", 0.50)
         )
         min_edge = (
             getattr(config, "paper_training_min_ev", 0.02)
@@ -601,7 +837,7 @@ class MarketScanner:
         if quality_result.get("score", 0) < min_quality:
             return False
 
-        # ML confidence filter
+        # ML confidence filter (aligned with SignalQualityLayer)
         ml_conf = signal.get("ml", {}).get("confidence", 0)
         if ml_conf < min_confidence:
             return False
@@ -732,6 +968,15 @@ class MarketScanner:
             if should_emit_marker(market.paper_state, signal):
                 log_paper_trade(loc.name, date_str, horizon, signal)
                 self.engine.paper_account.record_trade(signal["cost"])
+                # SYNC: Update state.balance to match paper_account after trade
+                paper_state = (
+                    self.engine.paper_account.get_state()
+                    if hasattr(self.engine.paper_account, "get_state")
+                    else self.engine.paper_account
+                )
+                if hasattr(paper_state, "balance"):
+                    state.balance = paper_state.balance
+                    balance = state.balance  # Also update local variable
                 market.paper_position = signal
                 market.paper_state = build_signal_marker(signal)
                 result.new_trades += 1
@@ -768,6 +1013,8 @@ class MarketScanner:
                 priority=filter_decision["priority"],
                 emoji=filter_decision["emoji"],
             )
+            trade_context.update(self._paper_signal_context())
+            trade_context["ai_status"] = "VALIDÉ_GROQ" if signal.get("ai") else "NON_REQUIS"
             self.engine.feedback.notify_signal(
                 loc.name,
                 date_str,
@@ -780,6 +1027,7 @@ class MarketScanner:
                 signal["question"],
                 signal["market_id"],
                 note,
+                ai_note=format_ai_note(signal.get("ai")),
                 calibrated_prob=signal["p"],
                 market_prob=signal["entry_price"],
                 uncertainty=signal.get("edge_penalties", {}).get("uncertainty"),
@@ -817,7 +1065,9 @@ class MarketScanner:
     def resolve_pending_markets(self, balance, state, result):
         """Check and resolve all open markets."""
         for market in self.engine.storage.load_all_markets():
-            if market.status == "resolved" or not market.position or market.position.get("status") != "open":
+            live_open = bool(market.position and market.position.get("status") == "open")
+            paper_open = bool(market.paper_position and market.paper_position.get("status") in ("open", "paper"))
+            if market.status == "resolved" or not (live_open or paper_open):
                 continue
 
             new_balance, won, pnl = self.engine.resolve_market(market, balance)
@@ -826,13 +1076,15 @@ class MarketScanner:
 
             balance = new_balance
             result.resolved += 1
-            if won:
-                state.wins += 1
-            else:
-                state.losses += 1
+            if live_open:
+                if won:
+                    state.wins += 1
+                else:
+                    state.losses += 1
 
             unit_sym = "°F" if market.unit == "F" else "°C"
-            bucket = f"{market.position['bucket_low']}-{market.position['bucket_high']}{unit_sym}"
+            resolved_pos = market.position if live_open else market.paper_position
+            bucket = f"{resolved_pos['bucket_low']}-{resolved_pos['bucket_high']}{unit_sym}"
             temp_str = f"{market.actual_temp}{unit_sym}" if market.actual_temp is not None else "N/A"
 
             if won:

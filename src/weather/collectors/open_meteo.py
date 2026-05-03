@@ -5,7 +5,7 @@ import polars as pl
 from datetime import datetime, timezone, timedelta
 import logging
 import requests
-from src.weather.open_meteo_rate_limiter import rate_limited_get
+from ..open_meteo_rate_limiter import rate_limited_get
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +51,9 @@ class MultiModelCollector:
                 
                 # Fetch more models but filter them during processing or weighting
                 url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m&models={MODELS}&timezone=UTC"
-                response = rate_limited_get(url, timeout=10, max_429_retries=0)
+                response = rate_limited_get(url, timeout=10, max_429_retries=2)
                 if response.status_code == 429:
+                    logger.warning(f"Open-Meteo 429 for {city} after retries, using MET Norway fallback")
                     all_data.extend(self._fetch_metno_fallback(city, config, now_ts))
                     continue
                 resp = response.json()

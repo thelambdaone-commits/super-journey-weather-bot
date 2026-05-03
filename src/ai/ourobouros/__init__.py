@@ -2,8 +2,8 @@
 Ouroboros - Auto-improvement loop for GEM factory.
 
 Usage:
-    from src.ai.ourobouros import run_ourobouros
-    
+    import run_ourobouros from this package when running auto-improvement tasks.
+
     result = run_ourobouros(
         min_resolutions=10,
         max_retrain_per_day=2,

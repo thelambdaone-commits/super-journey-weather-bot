@@ -177,7 +177,7 @@ class ScalingRunner:
 
     def _generate_replay_rows(self) -> list[dict[str, Any]]:
         """Generate replay rows with proper quality tags."""
-        from src.data.market_replay import MarketReplayEngine
+        from .market_replay import MarketReplayEngine
         
         temp_engine = MarketReplayEngine(data_dir=str(self.data_dir))
         replays = temp_engine.replay_all_markets(target_scans=self.config.scans_per_market)

@@ -14,7 +14,7 @@ class OuroborosNotifier:
         if self.enabled:
             # Reuse existing TelegramNotifier
             try:
-                from src.notifications import get_notifier
+                from ...notifications import get_notifier
                 self._notifier = get_notifier()
             except ImportError:
                 self._notifier = None

@@ -89,7 +89,7 @@ class TuningTrial:
 
 def _load_dataset(split_dir: Path) -> tuple:
     """Load train/valid/test splits."""
-    from src.ml.xgboost_train import load_dataset
+    from .xgboost_train import load_dataset
     
     train_rows, X_train, y_train = load_dataset(split_dir, "train")
     valid_rows, X_valid, y_valid = load_dataset(split_dir, "valid")

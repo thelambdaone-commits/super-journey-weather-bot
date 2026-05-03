@@ -1,6 +1,6 @@
 """
-Moat Manager V3.2 - Robust Data Layer.
-Includes typed errors, parameterized queries, and strict audit trails.
+Moat Manager V3.4 - Robust Data Layer.
+Includes typed errors, parameterized queries, retry logic with jitter, and strict audit trails.
 """
 
 import duckdb
@@ -8,8 +8,62 @@ import polars as pl
 from pathlib import Path
 from datetime import datetime, timezone
 import logging
+import time
+import random
+from typing import Callable, TypeVar, Any
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+def retry_on_lock_conflict(
+    max_retries: int = 3,
+    base_delay: float = 0.5,
+    max_delay: float = 5.0,
+    jitter_max: float = 0.25,
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """
+    Decorator to retry DuckDB operations on lock conflicts.
+    Uses exponential backoff with jitter to avoid thundering herd.
+    """
+    import functools
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            last_exc = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except (Exception,) as exc:
+                    last_exc = exc
+                    exc_str = str(exc).lower()
+                    is_lock_error = (
+                        "conflicting lock" in exc_str
+                        or "io error" in exc_str
+                        and "lock" in exc_str
+                    )
+                    if not is_lock_error or attempt >= max_retries - 1:
+                        raise
+                    delay = min(base_delay * (2**attempt), max_delay)
+                    # Add jitter to prevent thundering herd
+                    jitter = random.uniform(0, jitter_max)
+                    sleep_time = delay + jitter
+                    logger.warning(
+                        "DuckDB lock conflict on attempt %d/%d, retrying in %.2fs (jitter +%.2fs): %s",
+                        attempt + 1,
+                        max_retries,
+                        sleep_time,
+                        jitter,
+                        exc,
+                    )
+                    time.sleep(sleep_time)
+            raise last_exc  # type: ignore[misc]
+
+        return wrapper
+
+    return decorator
 
 
 def _city_lookup_values(city: str) -> list[str]:
@@ -129,6 +183,7 @@ class MoatManager:
             logger.exception("Failed to bootstrap Moat schema")
             raise MoatWriteError("Schema initialization failed")
 
+    @retry_on_lock_conflict(max_retries=3, base_delay=0.5, max_delay=5.0)
     def save_forecasts(self, df: pl.DataFrame):
         if not self.ready:
             raise MoatConnectionError("Database not ready")
@@ -149,6 +204,7 @@ class MoatManager:
             logger.exception("Failed to bulk insert forecasts")
             raise MoatWriteError("Forecast insertion failed")
 
+    @retry_on_lock_conflict(max_retries=3, base_delay=0.5, max_delay=5.0)
     def save_quote(
         self,
         market_id: str,

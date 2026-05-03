@@ -207,7 +207,7 @@ class SignalQualityLayer:
 
     def commit(self, signal: Signal) -> None:
         """Persist signal cooldown/idempotence markers after an emitted signal."""
-        from src.trading.idempotence import get_idempotence_manager
+        from ..trading.idempotence import get_idempotence_manager
 
         manager = get_idempotence_manager()
         manager.is_duplicate("signal", f"{signal.market_id}:{signal.city}", window_seconds=24 * 3600)
@@ -215,7 +215,7 @@ class SignalQualityLayer:
 
     def is_duplicate(self, signal: Signal) -> bool:
         """Check for duplicates or city-level cooldowns."""
-        from src.trading.idempotence import get_idempotence_manager
+        from ..trading.idempotence import get_idempotence_manager
 
         key = f"{signal.market_id}:{signal.city}"
         if get_idempotence_manager().is_duplicate("signal", key, window_seconds=24 * 3600):

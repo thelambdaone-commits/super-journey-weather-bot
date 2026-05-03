@@ -54,6 +54,7 @@ def build_signal_marker(signal: dict) -> dict:
         "forecast_src": signal["forecast_src"],
         "forecast_temp": signal["forecast_temp"],
         "entry_price": signal["entry_price"],
+        "p": signal.get("p"),
         "ev": signal.get("ev", 0),
         "ml_conf": signal.get("ml", {}).get("confidence", 0),
         "recorded_at": datetime.now(timezone.utc).isoformat(),

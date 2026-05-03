@@ -26,6 +26,39 @@ class EdgeEstimate:
     volume: float
 
 
+@dataclass
+class RuntimeEdge:
+    """Runtime edge used by the scanner's legacy opportunity flow."""
+
+    raw_ev: float
+    adjusted_ev: float
+    penalties: dict[str, float]
+
+
+class EdgeEngine:
+    """Compute runtime EV with small confidence and data-quality haircuts."""
+
+    def compute(
+        self,
+        model_probability: float,
+        market_ask: float,
+        features: dict,
+        source: str | None,
+        volume: float,
+    ) -> RuntimeEdge:
+        raw_ev = gross_edge(float(model_probability), float(market_ask))
+        confidence = max(0.0, min(1.0, float(features.get("confidence", 0.5) or 0.0)))
+        bias = abs(float(features.get("bias", features.get("source_bias", 0.0)) or 0.0))
+
+        penalties = {
+            "low_confidence": round((1.0 - confidence) * 0.02, 6),
+            "source_bias": round(min(bias / 100.0, 0.03), 6),
+            "low_volume": 0.01 if float(volume or 0.0) < 500.0 else 0.0,
+        }
+        adjusted_ev = raw_ev - sum(penalties.values())
+        return RuntimeEdge(raw_ev=raw_ev, adjusted_ev=adjusted_ev, penalties=penalties)
+
+
 def implied_probability_from_price(price: float) -> float:
     """Convert a market price (0-1) to implied probability."""
     return price
@@ -54,10 +87,18 @@ def estimate_slippage(orderbook: dict, size: float, side: str = "buy") -> float:
     levels = orderbook.get("asks" if side == "buy" else "bids", [])
     remaining = size
     total_cost = 0.0
-    best_price = float(levels[0][0]) if levels else 0.0
+    if levels and isinstance(levels[0], dict):
+        best_price = float(levels[0].get("price", 0.0))
+    else:
+        best_price = float(levels[0][0]) if levels else 0.0
     for level in levels:
-        price = float(level[0])
-        avail_usd = float(level[1]) * price
+        if isinstance(level, dict):
+            price = float(level.get("price", 0.0))
+            size_shares = float(level.get("size", 0.0))
+        else:
+            price = float(level[0])
+            size_shares = float(level[1])
+        avail_usd = size_shares * price
         take = min(remaining, avail_usd)
         total_cost += take * price
         remaining -= take

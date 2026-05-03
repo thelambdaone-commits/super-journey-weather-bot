@@ -286,7 +286,7 @@ class ResolutionMatcher:
             }
 
             try:
-                from src.weather.open_meteo_rate_limiter import rate_limited_get
+                from ..weather.open_meteo_rate_limiter import rate_limited_get
                 response = rate_limited_get(url, params=params, timeout=10)
                 if response.status_code == 200:
                     data = response.json()

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 
-from src.ml.registry import ModelRegistry
+from ...ml.registry import ModelRegistry
 
 class PipelineRunner:
     """Runs the ML pipeline commands and manages versioning."""

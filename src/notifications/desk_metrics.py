@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.notifications.telegram_control_center import send_message
+from .telegram_control_center import send_message
 
 
 EVENT_LOG = Path(os.getenv("DESK_EVENT_LOG", "data/desk_events.jsonl"))

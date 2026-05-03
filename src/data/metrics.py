@@ -10,8 +10,8 @@ from typing import List, Optional
 class AuditMetrics:
     total_trades: int
     win_rate: float
-    profit_factor: float
-    sharpe_ratio: float
+    profit_factor: Optional[float]
+    sharpe_ratio: Optional[float]
     max_drawdown: float
     expectancy_per_trade: float
     total_pnl_net: float
@@ -28,18 +28,32 @@ class AuditMetrics:
 def calculate_audit_metrics(trades: List[dict], starting_balance: float) -> AuditMetrics:
     """Compute institutional-grade metrics from trade history."""
     if not trades:
-        return AuditMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0)
+        return AuditMetrics(
+            total_trades=0,
+            win_rate=0.0,
+            profit_factor=None,
+            sharpe_ratio=None,
+            max_drawdown=0.0,
+            expectancy_per_trade=0.0,
+            total_pnl_net=0.0,
+            avg_win=0.0,
+            avg_loss=0.0,
+            r_multiple=0.0,
+            total_fees=0.0,
+            avg_slippage=0.015,
+            drift_status="insufficient_data",
+        )
 
     wins = [t for t in trades if t.get("pnl", 0) > 0]
     losses = [t for t in trades if t.get("pnl", 0) < 0]
-    
+
     total_pnl = sum(t.get("pnl", 0) for t in trades)
     gross_profit = sum(t.get("pnl", 0) for t in wins)
     gross_loss = abs(sum(t.get("pnl", 0) for t in losses))
-    
+
     total_trades = len(trades)
     win_rate = len(wins) / total_trades if total_trades > 0 else 0
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
     expectancy = total_pnl / total_trades if total_trades > 0 else 0
     
     # Calculate Sharpe Ratio (simplified daily proxy)
@@ -60,14 +74,15 @@ def calculate_audit_metrics(trades: List[dict], starting_balance: float) -> Audi
         max_dd = max(max_dd, dd)
 
     # Drift Detection (Last 7 days vs History)
-    drift_status = "stable"
-    if len(trades) > 20:
+    drift_status = "insufficient_data"
+    if len(trades) >= 20:
+        drift_status = "stable"
         import time
         now = time.time()
         recent_trades = [t for t in trades if (now - t.get("unix_ts", 0)) < 7 * 24 * 3600]
         if len(recent_trades) > 5:
             recent_pf = sum(t.get("pnl",0) for t in recent_trades if t.get("pnl",0)>0) / abs(sum(t.get("pnl",0) for t in recent_trades if t.get("pnl",0)<0) or 1)
-            if recent_pf < profit_factor * 0.7:
+            if profit_factor is not None and recent_pf < profit_factor * 0.7:
                 drift_status = "degrading"
             if recent_pf < 0.9:
                 drift_status = "critical"
@@ -79,7 +94,7 @@ def calculate_audit_metrics(trades: List[dict], starting_balance: float) -> Audi
     return AuditMetrics(
         total_trades=total_trades,
         win_rate=round(win_rate, 4),
-        profit_factor=round(profit_factor, 2),
+        profit_factor=round(profit_factor, 2) if profit_factor is not None else None,
         sharpe_ratio=round(sharpe, 2),
         max_drawdown=round(max_dd, 4),
         expectancy_per_trade=round(expectancy, 4),
@@ -96,14 +111,16 @@ def calculate_audit_metrics(trades: List[dict], starting_balance: float) -> Audi
 
 def format_audit_report(metrics: AuditMetrics) -> str:
     """Format metrics into a professional audit report."""
+    pf_str = f"`{metrics.profit_factor:.2f}`" if metrics.profit_factor is not None else "`N/A`"
+    sharpe_str = f"`{metrics.sharpe_ratio:.2f}`" if metrics.sharpe_ratio is not None else "`N/A`"
     return (
         f"📊 *QUANT AUDIT REPORT*\n\n"
         f"| Metric | Value |\n"
         f"| :--- | :--- |\n"
         f"| Total Trades | `{metrics.total_trades}` |\n"
         f"| Win Rate | `{metrics.win_rate*100:.1f}%` |\n"
-        f"| Profit Factor | `{metrics.profit_factor}` |\n"
-        f"| Sharpe Ratio | `{metrics.sharpe_ratio}` |\n"
+        f"| Profit Factor | {pf_str} |\n"
+        f"| Sharpe Ratio | {sharpe_str} |\n"
         f"| Max Drawdown | `{metrics.max_drawdown*100:.1f}%` |\n"
         f"| Expectancy/Trade | `${metrics.expectancy_per_trade:.4f}` |\n"
         f"| Avg Win / Loss | `${metrics.avg_win} / ${metrics.avg_loss}` |\n"

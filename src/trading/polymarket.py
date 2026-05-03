@@ -327,6 +327,7 @@ def refresh_outcome_orderbook(outcome: Dict) -> bool:
             "last_trade_price": _as_float(book.get("last_trade_price")),
             "tick_size": _as_float(book.get("tick_size")),
             "min_order_size": _as_float(book.get("min_order_size")),
+            "orderbook": book,
             "orderbook_status": "ok",
         }
     )
