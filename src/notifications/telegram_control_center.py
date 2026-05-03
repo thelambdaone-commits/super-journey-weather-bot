@@ -58,6 +58,13 @@ def now():
 def pct(v):
     return f"{v:+.1f}%" if v != 0 else "0.0%"
 
+def money(v):
+    try:
+        value = float(v or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return f"{value:+,.2f}$" if value < 0 else f"{value:,.2f}$"
+
 def fmt_p(v):
     return f"{v*100:.1f}%"
 
@@ -103,7 +110,42 @@ Capital preserved.
     return send_message(msg.strip())
 
 def send_daily_report(stats: dict):
-    """📊 DAILY LIVE REPORT"""
+    """📊 DAILY PAPER/LIVE REPORT"""
+    mode = str(stats.get("mode") or "live").upper()
+    if mode == "PAPER":
+        details = stats.get("details") or []
+        detail_lines = "\n".join(
+            f"• {item.get('city', 'Unknown')} {item.get('date', '')}: "
+            f"{item.get('status', 'N/A')} ({money(item.get('pnl', 0.0))})"
+            for item in details
+        ) or "• Aucun trade clôturé aujourd'hui"
+        msg = f"""
+📊 <b>DAILY PAPER TRADE SUMMARY</b>
+
+Date: {stats.get("today", now().split()[0])}
+
+Trades ouverts aujourd'hui: <b>{stats.get("trades_opened_today", 0)}</b>
+Mise ouverte aujourd'hui: <b>{money(stats.get("stake_opened_today", 0.0))}</b>
+
+Trades clôturés aujourd'hui: <b>{stats.get("closed_today", 0)}</b>
+Wins: {stats.get("wins_today", 0)}
+Losses: {stats.get("losses_today", 0)}
+Flats: {stats.get("flats_today", 0)}
+PnL aujourd'hui: <b>{money(stats.get("pnl_today", 0.0))}</b>
+
+{detail_lines}
+
+Gains cumulés: <b>{money(stats.get("paper_total_gains", 0.0))}</b>
+Pertes cumulées: <b>{money(stats.get("paper_total_losses", 0.0))}</b>
+PnL réalisé: <b>{money(stats.get("paper_total_pnl", 0.0))}</b>
+Cash PnL: <b>{money(stats.get("paper_cash_pnl", 0.0))}</b>
+Expo ouverte: <b>{money(stats.get("paper_open_exposure", 0.0))}</b>
+Equity: <b>{money(stats.get("paper_equity", 0.0))}</b>
+
+Time: {now()}
+"""
+        return send_message(msg.strip())
+
     msg = f"""
 📊 <b>DAILY LIVE REPORT</b>
 

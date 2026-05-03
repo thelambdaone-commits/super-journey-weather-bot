@@ -3,8 +3,8 @@ Market resolution logic with real-time actual polling.
 """
 from __future__ import annotations
 import time
-from src.notifications.telegram_control_center import send_trust_update
-from src.notifications.desk_metrics import log_event
+from ..notifications.telegram_control_center import send_trust_update
+from ..notifications.desk_metrics import log_event
 from datetime import datetime, timezone
 from ..utils.feature_flags import is_enabled
 from ..settlement.station_map import get_station_info
@@ -72,7 +72,9 @@ class MarketResolver:
 
         pnl = pos.get("pnl")
         market.pnl = pnl
-        market.status = "resolved"
+        if market.status != "resolved":
+            market.status = "resolved"
+            market.resolved_at = datetime.now(timezone.utc).isoformat()
         market.resolved_outcome = "win" if won else "loss"
 
         if hasattr(self.engine, "feedback_recorder") and market.city in LOCATIONS:
@@ -132,13 +134,30 @@ class MarketResolver:
             "status": "closed",
         })
         market.pnl = pnl
-        market.status = "resolved"
+        if market.status != "resolved":
+            market.status = "resolved"
+            market.resolved_at = datetime.now(timezone.utc).isoformat()
         market.resolved_outcome = "win" if won else "loss"
 
         if account == "live":
             balance = balance + cost + pnl
         else:
-            self.engine.paper_account.record_result(won, pnl, cost=cost)
+            market_info = {
+                "city": market.city_name,
+                "market_id": pos.get("market_id") or getattr(market, "market_id", "unknown"),
+                "odds": market.paper_position.get("entry_price", 0.0) if market.paper_position else 0.0,
+            }
+            try:
+                self.engine.paper_account.record_result(
+                    won, pnl, cost=cost, market_info=market_info
+                )
+            except TypeError:
+                self.engine.paper_account.record_result(won, pnl, cost=cost)
+            # SYNC: Update state.balance to match paper_account after resolution
+            if hasattr(self.engine, "storage") and hasattr(self.engine.paper_account, "get_state"):
+                state = self.engine.storage.load_state()
+                state.balance = self.engine.paper_account.get_state().balance
+                self.engine.storage.save_state(state)
 
         if hasattr(self.engine, "feedback_recorder") and market.city in LOCATIONS:
             self.engine.feedback_recorder.record_resolution(
@@ -320,39 +339,31 @@ class MarketResolver:
             if actual is not None:
                 market.actual_temp = actual
 
-        # 3. Determine outcome
-        won = None
-        pos_for_outcome = market.position or market.paper_position
+        # 3. Determine outcome per open position. A closed historical position
+        # must not drive settlement for a still-open paper/live position.
+        live_won = self._resolve_position_outcome(market.position, market.actual_temp) if live_open else None
+        paper_won = self._resolve_position_outcome(market.paper_position, market.actual_temp) if paper_open else None
 
-        if market.actual_temp is not None and pos_for_outcome:
-            # PRIMARY: Use actual temperature vs bucket
-            won = self._outcome_from_actual(pos_for_outcome, market.actual_temp)
-        elif pos_for_outcome:
-            # FALLBACK: Use Polymarket resolution status
-            market_id = pos_for_outcome["market_id"]
-            won = check_market_resolved(market_id)
-
-        if won is None:
+        if live_won is None and paper_won is None:
             return balance, None, None
 
         # 4. Resolve Live Position
         pnl = None
-        if live_open:
+        if live_open and live_won is not None:
             pos = market.position
             price, size, shares = pos["entry_price"], pos["cost"], pos["shares"]
             fee = size * TRADING_FEE_PERCENT
-            pnl = round(shares * (1 - price) - fee, 2) if won else round(-size - fee, 2)
+            pnl = round(shares * (1 - price) - fee, 2) if live_won else round(-size - fee, 2)
             balance = balance + size + pnl
             pos.update({
-                "exit_price": 1.0 if won else 0.0,
+                "exit_price": 1.0 if live_won else 0.0,
                 "pnl": pnl,
                 "close_reason": "resolved",
                 "closed_at": datetime.now(timezone.utc).isoformat(),
                 "status": "closed"
             })
             market.pnl = pnl
-            market.status = "resolved"
-            market.resolved_outcome = "win" if won else "loss"
+            market.resolved_outcome = "win" if live_won else "loss"
 
             self.engine.feedback_recorder.record_resolution(
                 market=market,
@@ -363,31 +374,59 @@ class MarketResolver:
             )
 
         # 5. Resolve Paper Position
-        if paper_open:
+        paper_pnl = None
+        if paper_open and paper_won is not None:
             pos = market.paper_position
             price, size, shares = pos["entry_price"], pos["cost"], pos["shares"]
             fee = size * TRADING_FEE_PERCENT
-            paper_pnl = round(shares * (1 - price) - fee, 2) if won else round(-size - fee, 2)
+            paper_pnl = round(shares * (1 - price) - fee, 2) if paper_won else round(-size - fee, 2)
 
             pos.update({
-                "exit_price": 1.0 if won else 0.0,
+                "exit_price": 1.0 if paper_won else 0.0,
                 "pnl": paper_pnl,
                 "close_reason": "resolved",
                 "closed_at": datetime.now(timezone.utc).isoformat(),
                 "status": "closed"
             })
             # Update separate paper account
-            self.engine.paper_account.record_result(won, paper_pnl, cost=size)
+            market_info = {
+                "city": market.city_name,
+                "market_id": pos.get("market_id") or getattr(market, "market_id", "unknown"),
+                "odds": market.paper_position.get("entry_price", 0.0),
+            }
+            try:
+                self.engine.paper_account.record_result(
+                    paper_won, paper_pnl, cost=size, market_info=market_info
+                )
+            except TypeError:
+                self.engine.paper_account.record_result(paper_won, paper_pnl, cost=size)
+            # SYNC: Update state.balance to match paper_account after resolution
+            if hasattr(self.engine, "storage") and hasattr(self.engine.paper_account, "get_state"):
+                state = self.engine.storage.load_state()
+                state.balance = self.engine.paper_account.get_state().balance
+                self.engine.storage.save_state(state)
 
-            # If no live position, update market status based on paper
-            if not market.position:
-                market.status = "resolved"
-                market.resolved_outcome = "win" if won else "loss"
-                # Clear paper state so new trades can be executed if market reopens
+            if not live_open:
+                market.pnl = paper_pnl
+                market.resolved_outcome = "win" if paper_won else "loss"
                 market.paper_state = None
-                market.paper_position = None
 
-        return balance, won, pnl
+        if (not live_open or live_won is not None) and (not paper_open or paper_won is not None):
+            if market.status != "resolved":
+                market.status = "resolved"
+                market.resolved_at = datetime.now(timezone.utc).isoformat()
+
+        display_won = live_won if live_won is not None else paper_won
+        display_pnl = pnl if pnl is not None else paper_pnl
+        return balance, display_won, display_pnl
+
+    def _resolve_position_outcome(self, pos: dict | None, actual_temp: float | None) -> bool | None:
+        """Resolve one open position from actual weather, then Polymarket as fallback."""
+        if not pos:
+            return None
+        if actual_temp is not None:
+            return self._outcome_from_actual(pos, actual_temp)
+        return check_market_resolved(pos["market_id"])
 
     def force_resolve_all(self) -> int:
         """Force resolve all open markets."""

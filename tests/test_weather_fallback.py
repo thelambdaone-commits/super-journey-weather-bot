@@ -58,3 +58,19 @@ def test_get_forecasts_uses_metno_when_open_meteo_sources_fail(monkeypatch):
     assert snapshots["2026-04-29"]["metno"] == 16.4
     assert snapshots["2026-04-29"]["best"] == 16.4
     assert snapshots["2026-04-29"]["best_source"] == "metno"
+
+
+def test_get_actual_temp_skips_unavailable_meteostat_daily(monkeypatch, caplog):
+    def failing_archive(*args, **kwargs):
+        raise RuntimeError("archive unavailable")
+
+    caplog.set_level("INFO", logger=apis.__name__)
+    monkeypatch.setattr(apis, "_METEOSTAT_DAILY_AVAILABLE", None)
+    monkeypatch.setattr(apis, "rate_limited_get", failing_archive)
+
+    assert apis.get_actual_temp("london", "2026-04-29") is None
+    assert "Meteostat Daily fallback unavailable" in caplog.text
+
+    caplog.clear()
+    assert apis.get_actual_temp("london", "2026-04-29") is None
+    assert "Meteostat Daily fallback unavailable" not in caplog.text

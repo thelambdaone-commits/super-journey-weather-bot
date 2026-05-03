@@ -135,6 +135,146 @@ class TestPaperLogic(unittest.TestCase):
         self.assertEqual(market.paper_position["status"], "closed")
         self.assertLess(market.paper_position["pnl"], 0)
 
+    def test_resolver_does_not_use_closed_live_bucket_for_open_paper_outcome(self):
+        """A closed live position must not decide the outcome of an open paper position."""
+        market = Market(
+            city="paris",
+            city_name="Paris",
+            date="2026-04-28",
+            actual_temp=21.0,
+            position={
+                "market_id": "closed-live",
+                "entry_price": 0.50,
+                "cost": 20.0,
+                "shares": 40.0,
+                "bucket_low": 10.0,
+                "bucket_high": 12.0,
+                "status": "closed",
+                "close_reason": "stop",
+                "pnl": -6.5,
+            },
+            paper_position={
+                "market_id": "open-paper",
+                "entry_price": 0.40,
+                "cost": 20.0,
+                "shares": 50.0,
+                "bucket_low": 20.0,
+                "bucket_high": 22.0,
+                "status": "open",
+            },
+        )
+
+        from src.trading.resolver import MarketResolver
+
+        @dataclass
+        class Engine:
+            paper_account: PaperAccount
+
+        _, won, pnl = MarketResolver(Engine(self.paper)).resolve_market(market, balance=500.0)
+
+        self.assertTrue(won)
+        self.assertGreater(pnl, 0)
+        self.assertEqual(market.status, "resolved")
+        self.assertEqual(market.resolved_outcome, "win")
+        self.assertEqual(market.paper_position["status"], "closed")
+
+    def test_resolver_preserves_closed_paper_position_for_reports(self):
+        """Paper-only resolution should keep the closed trade details on the market."""
+        market = Market(
+            city="paris",
+            city_name="Paris",
+            date="2026-04-28",
+            actual_temp=21.0,
+            paper_position={
+                "market_id": "open-paper",
+                "entry_price": 0.40,
+                "cost": 20.0,
+                "shares": 50.0,
+                "bucket_low": 20.0,
+                "bucket_high": 22.0,
+                "status": "open",
+            },
+        )
+
+        from src.trading.resolver import MarketResolver
+
+        @dataclass
+        class Engine:
+            paper_account: PaperAccount
+
+        _, won, pnl = MarketResolver(Engine(self.paper)).resolve_market(market, balance=500.0)
+
+        self.assertTrue(won)
+        self.assertEqual(market.paper_position["status"], "closed")
+        self.assertEqual(market.paper_position["pnl"], pnl)
+        self.assertEqual(market.pnl, pnl)
+        self.assertIsNone(market.paper_state)
+
+    def test_auto_resolve_pending_settles_open_paper_position(self):
+        """The bot's scan-loop resolver path should settle pending paper bets."""
+        market = Market(
+            city="paris",
+            city_name="Paris",
+            date="2026-04-28",
+            paper_position={
+                "market_id": "open-paper",
+                "entry_price": 0.40,
+                "cost": 20.0,
+                "shares": 50.0,
+                "bucket_low": 20.0,
+                "bucket_high": 22.0,
+                "status": "open",
+                "ml": {"tier": "HIGH"},
+            },
+        )
+
+        @dataclass
+        class State:
+            balance: float = 500.0
+            peak_balance: float = 500.0
+            wins: int = 0
+            losses: int = 0
+
+        @dataclass
+        class Storage:
+            state: State = field(default_factory=State)
+            saved_markets: list = field(default_factory=list)
+
+            def load_state(self):
+                return self.state
+
+            def save_state(self, state):
+                self.state = state
+
+            def load_all_markets(self):
+                return [market]
+
+            def save_market(self, saved_market):
+                self.saved_markets.append(saved_market)
+
+        @dataclass
+        class Engine:
+            storage: Storage
+            paper_account: PaperAccount
+
+        from src.trading.resolver import MarketResolver
+
+        storage = Storage()
+        engine = Engine(storage, self.paper)
+        with (
+            mock.patch("src.trading.resolver.get_actual_temp", return_value=21.0),
+            mock.patch("src.trading.resolver.send_trust_update"),
+            mock.patch("src.trading.resolver.log_event"),
+        ):
+            result = MarketResolver(engine).auto_resolve_pending()
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(market.actual_temp, 21.0)
+        self.assertEqual(market.status, "resolved")
+        self.assertEqual(market.resolved_outcome, "win")
+        self.assertEqual(market.paper_position["status"], "closed")
+        self.assertEqual(len(storage.saved_markets), 1)
+
     def test_resolver_finalizes_closed_stop_for_learning(self):
         """When position is already closed with PnL, just finalize."""
         market = Market(

@@ -9,6 +9,8 @@ import signal
 import sys
 import logging
 import os
+import atexit
+import time
 from datetime import datetime, timezone
 from src.notifications.telegram_control_center import send_crash as crash_alert
 
@@ -24,10 +26,21 @@ from src.data.learning import format_learning_validation, run_learning_validatio
 from src.notifications import get_notifier
 from src.probability.bootstrap import bootstrap_calibration_fit, format_bootstrap_report
 from src.trading.engine import RuntimeModes, TradingEngine
+from src.utils.process_lock import ProcessLock, ProcessLockError
 from src.weather.config import get_config
 
 
 ENGINE: TradingEngine | None = None
+BOT_LOCK: ProcessLock | None = None
+BOT_LOCK_PATH = "data/weatherbot.lock"
+USAGE = (
+    "Usage: python bot.py "
+    "[run|status|report|paper-report|audit|resolve|poll|auto-resolve|errors|live-edge|"
+    "retrain-check|gem-check|test|train|tune|data-qa|backfill|calibrate|ai-status|"
+    "ranking-backtest|optimize-weights|learning-validation|ouroboros|walk-forward|purge] "
+    "[--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] "
+    "[--tui-on|--tui-off]"
+)
 
 
 class TelegramFeedback:
@@ -180,9 +193,30 @@ def create_engine() -> TradingEngine:
     return TradingEngine(config=config, modes=modes, feedback=TelegramFeedback(tui_mode=modes.tui_mode))
 
 
+def acquire_bot_lock() -> None:
+    """Prevent concurrent bot run processes from sharing writable resources."""
+    global BOT_LOCK
+    if BOT_LOCK is not None:
+        return
+
+    lock = ProcessLock(BOT_LOCK_PATH)
+    lock.acquire()
+    BOT_LOCK = lock
+    atexit.register(release_bot_lock)
+
+
+def release_bot_lock() -> None:
+    """Release the bot process lock."""
+    global BOT_LOCK
+    if BOT_LOCK is not None:
+        BOT_LOCK.release()
+        BOT_LOCK = None
+
+
 def run_loop() -> None:
     """Start the trading engine."""
     global ENGINE
+    acquire_bot_lock()
     ENGINE = create_engine()
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
@@ -192,6 +226,7 @@ def run_loop() -> None:
 def run_once() -> None:
     """Run one scan cycle and exit."""
     global ENGINE
+    acquire_bot_lock()
     ENGINE = create_engine()
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
@@ -301,13 +336,19 @@ def print_learning_validation() -> None:
         print(line)
 
 
+def market_resolved_unix_ts(m, fallback_ts=None):
+    """Get unix timestamp from market's resolved_at or fallback."""
+    if getattr(m, "resolved_at", None):
+        return int(datetime.fromisoformat(m.resolved_at).timestamp())
+    return int(fallback_ts or time.time())
+
+
 def print_paper_report():
     """Print paper trading performance report."""
-    from src.trading.paper_account import PaperAccount
+    from src.reporting.paper_report import format_paper_report
 
     config = get_config()
-    account = PaperAccount(config.data_dir)
-    print(account.get_report())
+    print(format_paper_report(data_dir=config.data_dir))
 
 
 def print_audit():
@@ -349,7 +390,7 @@ def print_audit():
     resolved_trades = []
     for m in markets:
         if m.status == "resolved" and m.pnl is not None:
-            resolved_trades.append({"pnl": m.pnl, "unix_ts": os.path.getmtime(config.data_dir)})
+            resolved_trades.append({"pnl": m.pnl, "unix_ts": market_resolved_unix_ts(m)})
 
     metrics = calculate_audit_metrics(resolved_trades, state.starting_balance)
     audit_txt = format_audit_report(metrics)
@@ -416,14 +457,14 @@ def main():
     )
 
     if len(sys.argv) < 2:
-        print(
-            "Usage: python bot.py [run|status|report|paper-report|audit|resolve|poll|auto-resolve|errors|live-edge|retrain-check|gem-check|test|train|tune|data-qa|backfill|calibrate|ai-status|ranking-backtest|walk-forward|purge] [--paper-on|--paper-off] [--live-on|--live-off] [--signal-on|--signal-off] [--tui-on|--tui-off]"
-        )
+        print(USAGE)
         sys.exit(1)
 
     cmd = sys.argv[1]
 
-    if cmd == "run":
+    if cmd in {"help", "--help", "-h"}:
+        print(USAGE)
+    elif cmd == "run":
         if "--once" in sys.argv:
             run_once()
         else:
@@ -692,13 +733,23 @@ def main():
                 if notifier.delete_message(i):
                     count += 1
             print(f"✅ Terminé: {count} messages supprimés.")
+    else:
+        print(f"Unknown command: {cmd}", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt:
         sys.exit(0)
+    except ProcessLockError as e:
+        logging.getLogger("bot").error("Startup blocked: %s", e)
+        print(f"Startup blocked: {e}", file=sys.stderr)
+        sys.exit(2)
+    except SystemExit as e:
+        sys.exit(e.code)
     except Exception as e:
         crash_alert("bot.py", repr(e))
         raise

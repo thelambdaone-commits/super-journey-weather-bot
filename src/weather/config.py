@@ -14,6 +14,8 @@ try:
 
     load_dotenv()
 except ImportError:
+    pass  # dotenv not available
+except ImportError:
     pass
 
 
@@ -23,25 +25,25 @@ class Config:
     # Trading core
     balance: float = 10000.0
     max_bet: float = 20.0
-    min_ev: float = 0.10
-    max_price: float = 0.45
-    min_volume: int = 500
+    min_ev: float = 0.015  # Lowered for opportunistic trading (was 0.10)
+    max_price: float = 0.70  # Increased to allow more opportunities (was 0.45)
+    min_volume: int = 50  # Lowered for opportunistic trading (was 500)
     min_hours: int = 2
     max_hours: int = 72
     kelly_fraction: float = 0.25
-    max_slippage: float = 0.03
-    scan_interval: int = 3600
+    max_slippage: float = 0.10  # Increased tolerance (was 0.03)
+    scan_interval: int = 10800  # 3 hours aligned with weather model runs (was 3600)
 
     # New required config fields (original plan + additions)
-    min_edge: float = 0.06
-    max_spread: float = 0.05
+    min_edge: float = 0.015  # Opportune edge threshold (was 0.06)
+    max_spread: float = 0.10  # Increased tolerance (was 0.05)
     max_position_pct: float = 0.02  # 2% bankroll per trade
     max_market_exposure_pct: float = 0.05  # 5% max exposure per market
     max_daily_drawdown: float = 0.05  # 5% daily drawdown limit
     estimated_fee_bps: float = 10.0  # 10 bps = 0.1% fee
     estimated_slippage_bps: float = 5.0  # 5 bps = 0.05% slippage
     require_positive_net_ev: bool = True
-    min_orderbook_depth_usd: float = 100.0  # Min orderbook depth at ask price (point 3)
+    min_orderbook_depth_usd: float = 5.0  # Min orderbook depth (was 100.0)
     max_orders_per_minute: int = 10  # Live safety (point 7)
     kill_switch_enabled: bool = False  # Global kill switch (point 7)
     calibration_min: int = 30
@@ -53,13 +55,14 @@ class Config:
     dashboard_enabled: bool = True
     signal_min_ev: float = 0.05
     signal_min_prob: float = 0.75
-    signal_min_confidence: float = 0.75
     signal_max_uncertainty: float = 0.18
     signal_rate_limit_hour: int = 3
     signal_city_cooldown_hours: int = 8
     signal_duplicate_window_hours: int = 24
     signal_min_price_move: float = 0.02
     signal_top_k: int = 3
+    report_signal_max_age_hours: int = 48
+    report_min_signal_price: float = 0.01
 
     # Dual Flow Configuration
     ai_flow_enabled: bool = False
@@ -67,10 +70,11 @@ class Config:
     ai_max_ev_threshold: float = 2.0
     ai_allow_low_confidence_high_ev: bool = False
     ai_force_blocking: bool = False  # False = parallel mode (max profit)
+    ai_max_reviews_per_scan: int = 5
 
     signal_flow_enabled: bool = True
     signal_min_quality_score: float = 0.60
-    signal_min_confidence: float = 0.70
+    signal_min_confidence: float = 0.50
     signal_min_edge: float = 0.05
     signal_bayesian_penalty_max: float = 0.30
 
@@ -87,6 +91,8 @@ class Config:
 
     # Surebet detection is passive by default: detect/log only, no multi-leg execution.
     surebet_detection_enabled: bool = True
+    max_clob_requests_per_scan: int = 30
+    surebet_prefilter_margin: float = 0.0
     surebet_min_profit_pct: float = 0.01
     surebet_fee_buffer_pct: float = 0.003
     surebet_max_total_stake_usd: float = 50.0
@@ -97,6 +103,7 @@ class Config:
     # Micro-Live Caps (hard limits - override Kelly)
     max_live_bet_usd: float = 10.0  # $10 per trade max for micro-live
     max_live_total_exposure_usd: float = 50.0  # $50 total max for micro-live
+    gem_threshold: float = 0.85  # Score threshold for GEM alerts
 
     # API Keys
     meteoblue_key: str = ""

@@ -4,9 +4,56 @@ Notification Formatter - Bridge to Premium V2 Telegram Templates.
 from __future__ import annotations
 from . import telegram_control_center as tg
 
+
+def _money(value, signed: bool = False) -> str:
+    try:
+        amount = float(value or 0.0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    if signed:
+        return f"{amount:+,.2f}$"
+    return f"{amount:,.2f}$"
+
+
+def _pct(value) -> str:
+    try:
+        return f"{float(value or 0.0) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
 def format_weather_signal(payload: dict) -> str:
     """Wrapper for legacy calls."""
-    return f"🚀 SIGNAL: {payload.get('city')} {payload.get('market_name')} | Edge: {payload.get('edge'):+.1f}%"
+    ai_status = payload.get("ai_status") or "NON_REQUIS"
+    paper_status = payload.get("paper_status") or "PAPER_ONLY"
+    pnl_realized = payload.get("paper_total_pnl")
+    total_gains = payload.get("paper_total_gains")
+    total_losses = payload.get("paper_total_losses")
+
+    return (
+        f"{payload.get('emoji', '🌡️')} *SIGNAL WEATHER EDGE*\n"
+        f"──────────────\n"
+        f"📍 *Ville:* {payload.get('city', 'Unknown')}\n"
+        f"📅 *Date:* `{payload.get('date', 'N/A')}` | Horizon: `{payload.get('horizon', 'N/A')}`\n"
+        f"📦 *Bucket:* `{payload.get('bucket', 'N/A')}`\n"
+        f"🧾 *Marché:* {payload.get('market_name', 'N/A')}\n"
+        f"──────────────\n"
+        f"🤖 *Décision IA:* `{ai_status}`\n"
+        f"🧪 *Mode:* `{paper_status}`\n"
+        f"→ Proba modèle: `{_pct(payload.get('calibrated_prob'))}` | Prix marché: `{_pct(payload.get('market_prob'))}`\n"
+        f"→ Edge net: `{_pct(payload.get('edge'))}` | Qualité: `{_pct(payload.get('signal_score'))}`\n"
+        f"→ Mise paper: `{_money(payload.get('size'))}`\n"
+        f"──────────────\n"
+        f"💰 *Paper PnL à jour*\n"
+        f"→ Gains: `{_money(total_gains)}` | Pertes: `{_money(total_losses)}`\n"
+        f"→ PnL réalisé: `{_money(pnl_realized, signed=True)}`\n"
+        f"→ Cash PnL: `{_money(payload.get('paper_cash_pnl'), signed=True)}` | Expo ouverte: `{_money(payload.get('paper_open_exposure'))}`\n"
+        f"→ Solde cash: `{_money(payload.get('paper_balance'))}` | Equity: `{_money(payload.get('paper_equity'))}`\n"
+        f"→ Fermés: `{payload.get('paper_closed_trades', 0)}` | Ouverts: `{payload.get('paper_open_trades', 0)}`\n"
+        f"──────────────\n"
+        f"📡 *Source:* `{payload.get('forecast_source', 'N/A')}`\n"
+        f"📝 {payload.get('note') or 'Validation complète avant paper trade.'}"
+    )
 
 def format_signal_for_telegram(signal_dict: dict) -> bool:
     """

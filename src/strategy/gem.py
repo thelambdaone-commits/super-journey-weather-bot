@@ -58,6 +58,7 @@ class GEMDetector:
         self.kelly_multiplier = GEM_KELLY_MULTIPLIER
         self.min_confidence = GEM_MIN_CONFIDENCE
         self.min_divergence = GEM_MIN_DIVERGENCE
+        self.min_total_score = 8.0
     
     def is_excluded(self, question: str, outcomes: list) -> tuple[bool, str]:
         """Check if market should be excluded (fake GEM patterns)."""
@@ -156,7 +157,7 @@ class GEMDetector:
                 spread <= self.max_spread and
                 divergence >= self.min_divergence and
                 confidence >= self.min_confidence and
-                total >= 8.0
+                total >= self.min_total_score
             ),
         )
     

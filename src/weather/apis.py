@@ -9,11 +9,12 @@ from typing import Dict, Optional
 from .locations import Location, get_by_slug, get_timezone, get_forecast_priority
 from .open_meteo_rate_limiter import rate_limited_get
 from .ensemble_optimizer import EnsembleOptimizer
-from src.notifications.telegram_control_center import send_incident
-from src.notifications.desk_metrics import log_event
+from ..notifications.telegram_control_center import send_incident
+from ..notifications.desk_metrics import log_event
 
 logger = logging.getLogger(__name__)
 METNO_USER_AGENT = "weatherbot/1.0 github.com/weatherbot"
+_METEOSTAT_DAILY_AVAILABLE: bool | None = None
 
 
 class WeatherAPIError(Exception):
@@ -73,7 +74,7 @@ def get_gfs(city_slug: str, dates: list[str]) -> Dict[str, float]:
                         result[date] = round(temp, 1) if loc.unit == "C" else round(temp)
             return result
         except (Exception,) as e:
-            pass
+            logger.warning("GFS attempt %s failed for %s: %s", attempt + 1, city_slug, e)
     raise WeatherAPIError(f"GFS failed after 3 attempts")
 
 
@@ -101,7 +102,7 @@ def get_hrrr(city_slug: str, dates: list[str]) -> Dict[str, float]:
                         result[date] = round(temp)
             return result
         except (Exception,) as e:
-            pass
+            logger.warning("HRRR attempt %s failed for %s: %s", attempt + 1, city_slug, e)
     raise WeatherAPIError(f"HRRR failed after 3 attempts")
 
 
@@ -123,7 +124,7 @@ def get_dwd(city_slug: str, dates: list[str]) -> Dict[str, float]:
                         if temp is not None:
                             result[date] = round(temp)
     except (Exception,) as e:
-        pass
+        logger.warning("DWD failed for %s: %s", city_slug, e)
     return result
 
 
@@ -149,7 +150,7 @@ def get_nws(city_slug: str, dates: list[str]) -> Dict[str, float]:
                     if temp is not None:
                         result[date_str[:10]] = round(temp)
     except (Exception,) as e:
-        pass
+        logger.warning("NWS failed for %s: %s", city_slug, e)
     return result
 
 
@@ -211,7 +212,7 @@ def get_metar(city_slug: str) -> Optional[float]:
                     return round(float(temp_c) * 9/5 + 32)
                 return round(float(temp_c), 1)
     except (Exception,) as e:
-        pass
+        logger.warning("METAR failed for %s: %s", city_slug, e)
     return None
 
 
@@ -244,9 +245,22 @@ def get_actual_temp(city_slug: str, date_str: str, station: str = "GENERIC") -> 
     except (Exception,) as e:
         logger.warning(f"Open-Meteo Archive failed for {city_slug}: {e}")
     
-    # 2) Meteostat fallback — gratuit/open-source
+    # 2) Meteostat fallback — gratuit/open-source.
+    # Meteostat 2.x no longer exposes the legacy Daily class used here, so
+    # disable this fallback quietly when the installed package lacks it.
     try:
-        from meteostat import Point, Daily
+        global _METEOSTAT_DAILY_AVAILABLE
+        if _METEOSTAT_DAILY_AVAILABLE is False:
+            return None
+
+        try:
+            from meteostat import Daily, Point
+        except ImportError:
+            _METEOSTAT_DAILY_AVAILABLE = False
+            logger.info("Meteostat Daily fallback unavailable; skipping fallback")
+            return None
+
+        _METEOSTAT_DAILY_AVAILABLE = True
 
         day = datetime.strptime(date_str, "%Y-%m-%d")
         point = Point(loc.lat, loc.lon)

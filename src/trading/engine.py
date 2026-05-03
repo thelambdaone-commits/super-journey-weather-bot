@@ -4,6 +4,7 @@ Trading engine orchestration.
 
 from __future__ import annotations
 
+import json
 import time
 import logging
 import os
@@ -19,6 +20,7 @@ from ..ml import train_model
 from ..probability.inference import ProbabilityEngine
 from ..storage import Market, Storage, get_storage
 from ..strategy.edge import (
+    EdgeEngine,
     gross_edge,
     net_ev,
     estimate_fee,
@@ -57,6 +59,31 @@ def can_trade_live(config) -> tuple[bool, str]:
 logger = logging.getLogger(__name__)
 
 MONITOR_INTERVAL = 600
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    """Parse persisted ISO timestamps, accepting trailing Z."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except ValueError:
+        return None
+
+
+def _display_edge(edge: float | None, signal: dict) -> float:
+    """Return edge in percentage points for reports, preferring probability-price edge."""
+    probability = signal.get("p")
+    price = signal.get("entry_price") or signal.get("price")
+    try:
+        if probability is not None and price is not None:
+            return (float(probability) - float(price)) * 100.0
+        return float(edge or 0.0) * 100.0
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _signal_bucket(candidate: dict, trade_context: dict, signal: dict) -> str:
@@ -100,6 +127,7 @@ class TradingEngine:
         self.scanner = MarketScanner(self)
         self.resolver = MarketResolver(self)
         self.paper_account = PaperAccount(config.data_dir)
+        self._sync_state_from_paper_account()
         self.portfolio_optimizer = PortfolioOptimizer(config)
         self.executor = ClobExecutor(config)
         self.running = True
@@ -111,10 +139,27 @@ class TradingEngine:
         # Load persistent timing
         state = self.storage.load_state()
         self.last_report_ts = state.last_report_ts
-        self.gem_threshold = 0.85  # Score threshold for GEM
+        self.gem_threshold = float(getattr(config, "gem_threshold", 0.85))
         from ..strategy.gem import GEMDetector
 
         self.gem_detector = GEMDetector()
+
+    def _sync_state_from_paper_account(self) -> None:
+        """Keep legacy storage state aligned with the reconciled paper ledger."""
+        if not getattr(self.modes, "paper_mode", False):
+            return
+        paper_stats = self.paper_account.get_state()
+        if not getattr(paper_stats, "accounting_complete", False):
+            return
+        try:
+            state = self.storage.load_state()
+            state.balance = paper_stats.balance
+            state.total_trades = paper_stats.total_trades
+            state.wins = paper_stats.wins
+            state.losses = paper_stats.losses
+            self.storage.save_state(state)
+        except Exception:
+            logger.exception("Failed to sync storage state from paper account")
 
     def stop(self) -> None:
         """Request a graceful stop."""
@@ -124,7 +169,18 @@ class TradingEngine:
         """Build a premium health summary with emojis."""
         state = self.storage.load_state()
         markets = self.storage.load_all_markets()
-        open_pos = [m for m in markets if m.position and m.position.get("status") == "open"]
+        open_live = [m for m in markets if m.position and m.position.get("status") == "open"]
+        open_paper = [m for m in markets if m.paper_position and m.paper_position.get("status") in ("open", "paper")]
+        open_pos = open_live + open_paper
+        paper_stats = self.paper_account.stats
+        
+        # Guard: Prevent regression - paper positions must be counted
+        if len(open_paper) > 0 and len(open_pos) == len(open_live):
+            import logging
+            logging.getLogger(__name__).error(
+                f"REGRESSION: Paper positions NOT counted! "
+                f"Live: {len(open_live)}, Paper: {len(open_paper)}, Total: {len(open_pos)}"
+            )
 
         mode_label = bot_mode_label(self.modes).upper()
         live_status = "ACTIVÉ ⚠️" if self.modes.live_trade else "DÉSACTIVÉ"
@@ -138,12 +194,15 @@ class TradingEngine:
             f"→ Scan: `{self.config.scan_interval // 60} min`\n"
             f"──────────────\n"
             f"💰 *PORTEFEUILLE*\n"
-            f"→ Solde: `${state.balance:,.2f}`\n"
-            f"→ Positions: `{len(open_pos)}` ouvertes\n"
+            f"→ Solde cash: `${paper_stats.balance:,.2f}`\n"
+            f"→ Equity paper: `${getattr(paper_stats, 'equity', paper_stats.balance):,.2f}`\n"
+            f"→ Positions: `{len(open_pos)}` ouvertes ({len(open_live)} live, {len(open_paper)} paper)\n"
+            f"→ Historique: `{paper_stats.total_trades}` paris\n"
+            f"{self._gains_pertes_display(paper_stats)}\n"
             f"→ Marchés: `{len(markets)}` suivis\n"
             f"──────────────\n"
             f"🧠 *INTELLIGENCE*\n"
-            f"→ ML Samples: `{self.ml_model.get('samples', 0)}` units\n"
+            f"→ ML Samples: `{self._ml_sample_count()}` units\n"
             f"→ Diagnostics: `Optimisé` ✅\n"
             f"──────────────\n"
             f"📡 *CONNECTIVITÉ*\n"
@@ -183,12 +242,113 @@ class TradingEngine:
         open_pos_cost = sum(
             m.position.get("cost", 0) for m in markets if m.position and m.position.get("status") == "open"
         )
-        max_exposure = getattr(self.config, "max_exposure", 500.0)  # Default $500
+        max_exposure = self._max_total_exposure(state.balance)
         if open_pos_cost > max_exposure:
             self.emit(f"⚠️ EXPOSURE LIMIT: Current ${open_pos_cost:.2f} > Max ${max_exposure:.2f}")
             # We don't stop the bot, but scanner should not open new trades.
 
         return True
+
+    def _ml_sample_count(self) -> int:
+        """Return model sample count for health reports across model implementations."""
+        if isinstance(self.ml_model, dict):
+            return int(self.ml_model.get("samples", 0) or 0)
+        return int(getattr(self.ml_model, "samples", 0) or 0)
+
+    def _max_total_exposure(self, balance: float) -> float:
+        """Calculate total open-position exposure limit from explicit config or pct cap."""
+        explicit_limit = getattr(self.config, "max_total_exposure", None)
+        if explicit_limit is not None:
+            return float(explicit_limit)
+        exposure_pct = float(getattr(self.config, "max_market_exposure_pct", 0.05))
+        return float(balance) * exposure_pct
+
+    def _gains_pertes_display(self, paper_stats) -> str:
+        """Return gains/pertes display based on history availability."""
+        from pathlib import Path
+        
+        data_dir = getattr(getattr(self, "paper_account", None), "file_path", Path("data/paper_account.json")).parent
+        history_file = data_dir / "paper_trades.jsonl"
+        
+        pnl_total = float(getattr(paper_stats, "total_pnl", 0.0) or 0.0)
+
+        def money(value: float) -> str:
+            if value < 0:
+                return f"-${abs(value):,.2f}"
+            return f"${value:,.2f}"
+
+        def incomplete_display() -> str:
+            return (
+                f"→ Wins: `{paper_stats.wins}` | Losses: `{paper_stats.losses}`\n"
+                f"→ Gains: `incomplet` | Pertes: `incomplet`\n"
+                f"→ PnL réalisé: `{money(pnl_total)}`"
+            )
+
+        def complete_display() -> str:
+            display = (
+                f"→ Wins: `{paper_stats.wins}` | Losses: `{paper_stats.losses}`\n"
+                f"→ Gains: `{money(float(paper_stats.total_gains))}` | "
+                f"Pertes: `{money(float(paper_stats.total_losses))}`\n"
+                f"→ PnL réalisé: `{money(pnl_total)}`"
+            )
+            if getattr(paper_stats, "accounting_complete", False):
+                display += (
+                    f"\n→ Fermés: `{getattr(paper_stats, 'closed_trades', 0)}` | "
+                    f"Ouverts: `{getattr(paper_stats, 'open_trades', 0)}`\n"
+                    f"→ Cash PnL: `{money(float(getattr(paper_stats, 'cash_pnl', 0.0) or 0.0))}` | "
+                    f"Expo ouverte: `{money(float(getattr(paper_stats, 'locked_in_positions', 0.0) or 0.0))}`"
+                )
+            return display
+
+        if not history_file.exists() or history_file.stat().st_size == 0:
+            return incomplete_display()
+        
+        # Check if we have detailed history or only legacy
+        has_detail = False
+        has_legacy_partial = False
+        has_legacy_exact = False
+        detail_wins = 0
+        detail_losses = 0
+        
+        with open(history_file, "r") as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        trade = json.loads(line)
+                        if trade.get("historical_reconstructed") or trade.get("estimated"):
+                            wins = int(trade.get("wins", 0) or 0)
+                            losses = int(trade.get("losses", 0) or 0)
+                            if wins > 0 and losses > 0:
+                                has_legacy_partial = True
+                            else:
+                                has_legacy_exact = True
+                        else:
+                            if "pnl" in trade:
+                                has_detail = True
+                                pnl = float(trade.get("pnl") or 0.0)
+                                if pnl > 0:
+                                    detail_wins += 1
+                                elif pnl < 0:
+                                    detail_losses += 1
+                    except:
+                        pass
+
+        detailed_history_complete = (
+            has_detail
+            and detail_wins == int(getattr(paper_stats, "wins", 0) or 0)
+            and detail_losses == int(getattr(paper_stats, "losses", 0) or 0)
+        )
+        
+        # Mixed legacy entries are incomplete unless detailed PnL records now
+        # cover the full win/loss split.
+        if has_legacy_partial and not detailed_history_complete:
+            return incomplete_display()
+        elif has_detail:
+            return complete_display()
+        elif has_legacy_exact:
+            return incomplete_display()
+        else:
+            return complete_display()
 
     def can_trade_live(self) -> tuple[bool, str]:
         """
@@ -242,7 +402,7 @@ class TradingEngine:
 
                             # Trigger Ouroboros (Auto-Improvement)
                             self.emit("Checking Ouroboros for auto-improvement...")
-                            from src.ai.ourobouros import run_ourobouros
+                            from ..ai.ourobouros import run_ourobouros
 
                             run_ourobouros(min_resolutions=10)
 
@@ -251,18 +411,26 @@ class TradingEngine:
                             self.emit(f"Report/Ouroboros error: {report_exc}")
                             logger.error(f"Failed to run hourly tasks: {report_exc}")
 
-                    # Scan Check
-                    if now - last_scan >= self.config.scan_interval:
+                    # Scan Check - Align with weather model runs (00z, 06z, 12z, 18z)
+                    should_scan = (now - last_scan) >= self.config.scan_interval
+                    
+                    # More precise timing: scan 30min after model runs
+                    if not should_scan:
+                        from src.trading.timing import should_scan_now
+                        if should_scan_now(datetime.fromtimestamp(last_scan, tz=timezone.utc)):
+                            should_scan = True
+                    
+                    if should_scan:
                         self.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] scanning...")
                         try:
-                            t0 = time.time()
                             start_perf = time.perf_counter()
                             try:
                                 result = self.scanner.scan_and_update()
                             finally:
-                                log_event("scan_cycle", latency_s=time.perf_counter() - start_perf)
+                                elapsed = time.perf_counter() - start_perf
+                                log_event("scan_cycle", latency_s=elapsed)
 
-                            self.latency_sum += time.time() - t0
+                            self.latency_sum += elapsed
                             self.latency_count += 1
 
                             # Auto-resolve pending markets after scan
@@ -405,16 +573,16 @@ class TradingEngine:
         ret = (balance - start) / start * 100 if start else 0
         wins = sum(1 for m in resolved if m.resolved_outcome == "win")
         losses = sum(1 for m in resolved if m.resolved_outcome == "loss")
-        total = len(open_live) + len(open_paper) + len(resolved)
-        wr = f"{wins / total * 100:.0f}%" if total else "0%"
+        total_resolved = len(resolved)
+        wr = f"{wins / total_resolved * 100:.0f}%" if total_resolved else "0%"
 
         return [
             f"\n{'=' * 50}",
             "WEATHERBOT STATUS",
             f"{'=' * 50}",
             f"Balance: ${balance:,.2f} ({ret:+.1f}%)",
-            f"Trades: {total} | W: {wins} | L: {losses} | WR: {wr}",
-            f"Open Live: {len(open_live)} | Open Paper: {len(open_paper)} | Resolved: {len(resolved)}",
+            f"Trades: {len(open_live) + len(open_paper) + total_resolved} | W: {wins} | L: {losses} | WR: {wr}",
+            f"Open Live: {len(open_live)} | Open Paper: {len(open_paper)} | Resolved: {total_resolved}",
             f"{'=' * 50}\n",
         ]
 
@@ -451,10 +619,69 @@ class TradingEngine:
         """Delegate force resolution to the resolver."""
         return self.resolver.force_resolve_all()
 
+    def _market_resolved_unix_ts(self, m, fallback_ts=None):
+        """Get unix timestamp from market's resolved_at or fallback."""
+        if getattr(m, "resolved_at", None):
+            return int(datetime.fromisoformat(m.resolved_at).timestamp())
+        return int(fallback_ts or time.time())
+
+    def _paper_daily_summary(self, markets, paper_stats, now_dt: datetime | None = None) -> dict:
+        """Summarize today's paper opens and settlements for Telegram daily recap."""
+        now_dt = now_dt or datetime.now(timezone.utc)
+        today = now_dt.date()
+        opened = []
+        closed = []
+
+        for market in markets:
+            pos = getattr(market, "paper_position", None) or {}
+            opened_at = _parse_iso_datetime(pos.get("opened_at"))
+            closed_at = _parse_iso_datetime(pos.get("closed_at"))
+            if opened_at and opened_at.date() == today:
+                opened.append((market, pos))
+            if closed_at and closed_at.date() == today and pos.get("pnl") is not None:
+                closed.append((market, pos))
+
+        pnl_today = sum(float(pos.get("pnl", 0.0) or 0.0) for _, pos in closed)
+        wins_today = sum(1 for _, pos in closed if float(pos.get("pnl", 0.0) or 0.0) > 0)
+        losses_today = sum(1 for _, pos in closed if float(pos.get("pnl", 0.0) or 0.0) < 0)
+        flats_today = sum(1 for _, pos in closed if float(pos.get("pnl", 0.0) or 0.0) == 0)
+        stake_opened = sum(float(pos.get("cost", 0.0) or 0.0) for _, pos in opened)
+
+        details = []
+        for market, pos in closed:
+            pnl = float(pos.get("pnl", 0.0) or 0.0)
+            details.append(
+                {
+                    "city": getattr(market, "city_name", getattr(market, "city", "unknown")),
+                    "date": getattr(market, "date", ""),
+                    "status": "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "FLAT",
+                    "pnl": pnl,
+                }
+            )
+
+        return {
+            "today": today.isoformat(),
+            "trades_opened_today": len(opened),
+            "stake_opened_today": stake_opened,
+            "closed_today": len(closed),
+            "wins_today": wins_today,
+            "losses_today": losses_today,
+            "flats_today": flats_today,
+            "pnl_today": pnl_today,
+            "details": details,
+            "paper_total_gains": getattr(paper_stats, "total_gains", 0.0),
+            "paper_total_losses": getattr(paper_stats, "total_losses", 0.0),
+            "paper_total_pnl": getattr(paper_stats, "total_pnl", 0.0),
+            "paper_cash_pnl": getattr(paper_stats, "cash_pnl", 0.0),
+            "paper_open_exposure": getattr(paper_stats, "locked_in_positions", 0.0),
+            "paper_balance": getattr(paper_stats, "balance", 0.0),
+            "paper_equity": getattr(paper_stats, "equity", getattr(paper_stats, "balance", 0.0)),
+        }
+
     def send_full_audit_report(self):
         """Generate and send the comprehensive hourly report."""
-        from src.data.metrics import calculate_audit_metrics
-        from src.trading.health import get_api_statuses
+        from ..data.metrics import calculate_audit_metrics
+        from .health import get_api_statuses
 
         state = self.storage.load_state()
         markets = self.storage.load_all_markets()
@@ -466,14 +693,19 @@ class TradingEngine:
                 resolved_trades.append(
                     {
                         "pnl": m.pnl,
-                        "unix_ts": time.time(),  # Proxy for metrics
+                        "unix_ts": self._market_resolved_unix_ts(m),
                     }
                 )
 
         metrics = calculate_audit_metrics(resolved_trades, state.starting_balance)
 
-        # 2. Portfolio Summary
-        drawdown = (state.peak_balance - state.balance) / state.peak_balance if state.peak_balance > 0 else 0
+        # 2. Portfolio Summary (use equity-based drawdown from paper account when available)
+        paper_account = getattr(self, "paper_account", None)
+        if paper_account is not None:
+            paper_stats = paper_account.get_state()
+            drawdown = paper_stats.drawdown
+        else:
+            drawdown = (state.peak_balance - state.balance) / state.peak_balance if state.peak_balance > 0 else 0
 
         # 3. API & Health
         api_statuses = get_api_statuses(self.config, self.feedback)
@@ -482,54 +714,115 @@ class TradingEngine:
 
         # 4. Risk & Diversification
         risk_summary = self.risk_manager.get_risk_summary(markets)
+        paper_only = not bool(getattr(self.config, "live_trade", False))
+        paper_exposure = sum(
+            float(getattr(m, "paper_position", {}).get("cost", 0.0) or 0.0)
+            for m in markets
+            if getattr(m, "paper_position", None)
+            and getattr(m, "paper_position", {}).get("status") in ("open", "paper")
+        )
 
-        # 5. Gather Latest Signals for ALL Cities
+        # Use state.balance for accurate reporting (single source of truth).
+        paper_balance = state.balance
+        paper_equity = state.balance + paper_exposure
+
+        # 5. Gather latest active/fresh signals for all cities.
         city_signals = []
         by_city = {}
+        now_dt = datetime.now(timezone.utc)
+        max_watch_age_s = float(getattr(self.config, "report_signal_max_age_hours", 48)) * 3600
+        min_report_price = float(getattr(self.config, "report_min_signal_price", 0.01))
         for m in markets:
             if m.status == "resolved":
                 continue
 
             # Priority: Open Position > Signal Marker > Last Analysis
             sig = None
-            if m.position and m.position.get("status") == "open":
+            signal_ts = None
+            position = getattr(m, "position", None)
+            paper_position = getattr(m, "paper_position", None)
+            signal_state = getattr(m, "signal_state", None)
+            last_analysis = getattr(m, "last_analysis", None)
+
+            if position and position.get("status") == "open":
+                signal_ts = _parse_iso_datetime(position.get("opened_at") or position.get("ts"))
                 sig = {
                     "city": m.city_name,
-                    "edge": m.position.get("ev", 0),
-                    "conf": m.position.get("ml", {}).get("confidence", 0) * 100,
-                    "price": m.position.get("entry_price", 0),
+                    "edge": _display_edge(position.get("ev", 0), position),
+                    "conf": position.get("ml", {}).get("confidence", 0) * 100,
+                    "price": position.get("entry_price", 0),
                     "risk": "OPEN",
                 }
-            elif m.signal_state:
+            elif paper_position and paper_position.get("status") in ("open", "paper"):
+                signal_ts = _parse_iso_datetime(paper_position.get("opened_at") or paper_position.get("ts"))
                 sig = {
                     "city": m.city_name,
-                    "edge": m.signal_state.get("ev", 0),
-                    "conf": m.signal_state.get("ml_conf", 0) * 100,
-                    "price": m.signal_state.get("entry_price", 0),
+                    "edge": _display_edge(paper_position.get("ev", 0), paper_position),
+                    "conf": paper_position.get("ml", {}).get("confidence", 0) * 100,
+                    "price": paper_position.get("entry_price", 0),
+                    "risk": "PAPER",
+                }
+            elif signal_state:
+                signal_ts = _parse_iso_datetime(signal_state.get("recorded_at") or signal_state.get("ts"))
+                raw_edge = signal_state.get("ev", 0)
+                if signal_state.get("p") is None and abs(float(raw_edge or 0.0)) > 1.0:
+                    continue
+                sig = {
+                    "city": m.city_name,
+                    "edge": _display_edge(raw_edge, signal_state),
+                    "conf": signal_state.get("ml_conf", 0) * 100,
+                    "price": signal_state.get("entry_price", 0),
                     "risk": "SIGNAL",
                 }
-            elif m.last_analysis:
+            elif last_analysis:
+                signal_ts = _parse_iso_datetime(last_analysis.get("ts"))
+                raw_edge = last_analysis.get("ev", 0)
+                if last_analysis.get("p") is None and abs(float(raw_edge or 0.0)) > 1.0:
+                    continue
                 sig = {
                     "city": m.city_name,
-                    "edge": m.last_analysis.get("ev", 0),
-                    "conf": m.last_analysis.get("conf", 0) * 100,
-                    "price": m.last_analysis.get("price", 0),
+                    "edge": _display_edge(raw_edge, last_analysis),
+                    "conf": last_analysis.get("conf", 0) * 100,
+                    "price": last_analysis.get("price", 0),
                     "risk": "WATCH",
                 }
 
             if sig:
-                # Keep the one with highest edge per city
+                sig["date"] = m.date
+                sig["ts"] = signal_ts.isoformat() if signal_ts else ""
+                if sig["risk"] == "WATCH":
+                    if not signal_ts:
+                        continue
+                    age_s = (now_dt - signal_ts).total_seconds()
+                    if age_s < 0 or age_s > max_watch_age_s:
+                        continue
+                    if float(sig.get("price") or 0.0) < min_report_price:
+                        continue
+
+                # Keep the strongest reportable signal per city after freshness/liquidity filters.
                 if m.city not in by_city or sig["edge"] > by_city[m.city]["edge"]:
                     by_city[m.city] = sig
 
         # Sort and limit to top 15 for readability
-        sorted_sigs = sorted(by_city.values(), key=lambda x: x["edge"], reverse=True)
+        reportable_signals = list(by_city.values())
+        paper_signals = [sig for sig in reportable_signals if sig.get("risk") == "PAPER"]
+        if paper_only and paper_signals:
+            reportable_signals = paper_signals
+        sorted_sigs = sorted(reportable_signals, key=lambda x: x["edge"], reverse=True)
         city_signals = sorted_sigs[:15]
 
+        # Calculate real PnL from state (not just resolved trades)
+        real_pnl = state.balance - state.starting_balance
+        real_pnl_pct = (real_pnl / state.starting_balance) * 100 if state.starting_balance > 0 else 0
+
         summary = {
-            "pnl_total": metrics.total_pnl_net,
-            "pnl_pct": (metrics.total_pnl_net / state.starting_balance) * 100 if state.starting_balance > 0 else 0,
-            "exposure": risk_summary["total_exposure"],
+            "mode": "paper" if paper_only else "live",
+            "pnl_total": real_pnl,
+            "pnl_pct": real_pnl_pct,
+            "exposure": 0.0 if paper_only else risk_summary["total_exposure"],
+            "paper_exposure": paper_exposure,
+            "paper_equity": paper_equity,
+            "paper_balance": paper_balance,
             "pf": metrics.profit_factor,
             "sharpe": metrics.sharpe_ratio,
             "drawdown": drawdown * 100,
@@ -546,13 +839,14 @@ class TradingEngine:
             "signals": len(city_signals),
             "wins": metrics.wins,
             "losses": metrics.losses,
-            "pnl": (metrics.total_pnl_net / state.starting_balance) * 100 if state.starting_balance > 0 else 0,
+            "pnl": real_pnl_pct,  # Use real PnL percentage
         }
+        if paper_account is not None:
+            summary.update(self._paper_daily_summary(markets, paper_stats, now_dt=now_dt))
 
         self.feedback.notify_hourly_report(summary, city_signals)
 
-        # Daily Live Report (As requested)
-        from src.notifications.telegram_control_center import send_daily_report
+        from ..notifications.telegram_control_center import send_daily_report
 
         send_daily_report(summary)
 
