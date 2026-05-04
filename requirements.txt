@@ -1,6 +1,6 @@
 # WeatherBot Dependencies (pinned versions)
 requests==2.33.1
-textual==8.2.4
+textual==8.2.5
 python-dotenv==1.2.2
 groq==1.2.0
 joblib==1.5.3
