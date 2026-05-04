@@ -71,6 +71,7 @@ class State:
     peak_balance: float = 10000.0
     last_report_ts: float = 0.0
     drift_status: str = "stable"
+    last_heartbeat: float = 0.0  # Timestamp of last scan cycle (heartbeat)
 
 
 @dataclass

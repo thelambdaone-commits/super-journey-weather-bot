@@ -18,6 +18,45 @@ class SizingResult:
     reason: str
 
 
+def reduce_size_to_liquidity(
+    intended_size: float,
+    orderbook: dict,
+    price: float,
+    min_liquid_size: float = 1.0,
+) -> tuple[float, str]:
+    """
+    Reduce position size to match available liquidity at or better than price.
+    Returns (adjusted_size, reason).
+    """
+    if not orderbook or not orderbook.get("asks"):
+        return 0.0, "no_orderbook"
+
+    # Calculate available liquidity at or better than price
+    available = 0.0
+    for level in orderbook.get("asks", []):
+        if isinstance(level, dict):
+            level_price = float(level.get("price", 0.0))
+            level_size = float(level.get("size", 0.0))
+        else:
+            level_price = float(level[0])
+            level_size = float(level[1])
+
+        if level_price <= price + 1e-6:
+            available += level_size * level_price
+        else:
+            break
+
+    if available < min_liquid_size:
+        return 0.0, f"liquidity_too_low ({available:.1f} < {min_liquid_size})"
+
+    if available >= intended_size:
+        return intended_size, "ok"
+
+    # Reduce size to available liquidity
+    reduced = max(min_liquid_size, available * 0.95)  # Leave 5% margin
+    return reduced, f"reduced_to_liquidity ({intended_size:.2f} -> {reduced:.2f})"
+
+
 def kelly_fraction_binary(probability: float, price: float) -> float:
     """
     Kelly for binary market:

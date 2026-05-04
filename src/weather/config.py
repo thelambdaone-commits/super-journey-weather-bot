@@ -47,9 +47,14 @@ class Config:
     max_orders_per_minute: int = 10  # Live safety (point 7)
     kill_switch_enabled: bool = False  # Global kill switch (point 7)
     calibration_min: int = 30
+    # Exposure limits (aligned with .env.example)
+    max_exposure_per_city: float = 100.0
+    max_exposure_per_region: float = 250.0
+    max_exposure_per_cluster: float = 300.0
+    max_total_exposure: float = 1000.0
     paper_mode: bool = False
     live_trade: bool = False
-    confirm_live_trading: str = ""  # Double lock: must be "I_ACCEPT_REAL_LOSS"
+    live_trade_confirm: str = ""  # Double lock: must be "I_ACCEPT_REAL_LOSS" (aligned with .env.example)
     signal_mode: bool = True
     tui_mode: bool = False
     dashboard_enabled: bool = True
@@ -104,6 +109,10 @@ class Config:
     max_live_bet_usd: float = 10.0  # $10 per trade max for micro-live
     max_live_total_exposure_usd: float = 50.0  # $50 total max for micro-live
     gem_threshold: float = 0.85  # Score threshold for GEM alerts
+
+    # Ouroboros (auto-improvement)
+    ouroboros_enabled: bool = True  # Set to False to disable in trading loop
+    ouroboros_timeout: int = 300  # Max seconds for Ouroboros subprocess
 
     # API Keys
     meteoblue_key: str = ""

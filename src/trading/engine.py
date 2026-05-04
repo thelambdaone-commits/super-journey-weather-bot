@@ -400,11 +400,29 @@ class TradingEngine:
                         try:
                             self.send_full_audit_report()
 
-                            # Trigger Ouroboros (Auto-Improvement)
-                            self.emit("Checking Ouroboros for auto-improvement...")
-                            from ..ai.ourobouros import run_ourobouros
-
-                            run_ourobouros(min_resolutions=10)
+                            # Trigger Ouroboros (Auto-Improvement) in isolated subprocess
+                            if getattr(self.config, "ouroboros_enabled", True):
+                                self.emit("Checking Ouroboros for auto-improvement (subprocess)...")
+                                import subprocess
+                                timeout = getattr(self.config, "ouroboros_timeout", 300)
+                                try:
+                                    result = subprocess.run(
+                                        [
+                                            "python", "-m", "src.ai.ourobouros",
+                                            "--min-resolutions", "10",
+                                            "--timeout", str(timeout),
+                                        ],
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=timeout + 10,
+                                    )
+                                    self.emit(f"Ouroboros subprocess done (rc={result.returncode})")
+                                    if result.stdout:
+                                        self.emit(f"Ouroboros output: {result.stdout[-200:]}")
+                                except subprocess.TimeoutExpired:
+                                    self.emit(f"⚠️ Ouroboros subprocess timed out after {timeout}s")
+                                except Exception as oexc:
+                                    self.emit(f"Ouroboros subprocess error: {oexc}")
 
                             self.last_report_ts = now
                         except (Exception,) as report_exc:
@@ -446,6 +464,9 @@ class TradingEngine:
                                 f" balance: ${state.balance:,.2f} | new: {result.new_trades} | "
                                 f"closed: {result.closed} | resolved: {result.resolved}"
                             )
+                            # Update heartbeat
+                            state.last_heartbeat = time.time()
+                            self.storage.save_state(state)
                             last_scan = now
                         except (Exception,) as scan_exc:
                             self.error_count += 1

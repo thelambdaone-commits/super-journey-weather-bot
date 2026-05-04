@@ -41,4 +41,6 @@ data_test/
 *.lock
 data/backups/
 data/tuning_history.jsonl
+.coverage
+bot_output.log
 data/best_hyperparams.json

@@ -62,12 +62,28 @@ class MarketScanner:
         self._orderbook_cache: dict[str, dict | None] = {}
         self._clob_requests_used = 0
         self._ai_reviews_used = 0
+        # Scan statistics for summary
+        self._scan_stats: dict[str, int] = {
+            "candidates": 0,
+            "liquidity_skips": 0,
+            "risk_skips": 0,
+            "ai_skips": 0,
+            "other_skips": 0,
+        }
 
     def scan_and_update(self) -> ScanResult:
         """Run a full scan cycle."""
         self._orderbook_cache = {}
         self._clob_requests_used = 0
         self._ai_reviews_used = 0
+        # Reset scan statistics
+        self._scan_stats = {
+            "candidates": 0,
+            "liquidity_skips": 0,
+            "risk_skips": 0,
+            "ai_skips": 0,
+            "other_skips": 0,
+        }
         now = datetime.now(timezone.utc)
         state = self.engine.storage.load_state()
         balance = state.balance
@@ -273,6 +289,7 @@ class MarketScanner:
                 )
                 if not has_open_position and forecast_temp is not None and hours >= self.engine.config.min_hours:
                     # NEW: Score ALL buckets using range probability engine
+                    self._scan_stats["candidates"] += 1
                     opportunities = self.find_all_opportunities(
                         city_slug, loc, snap, outcomes, hours, base_features, balance
                     )
@@ -337,12 +354,21 @@ class MarketScanner:
 
                         if not risk_check["allowed"]:
                             self.engine.emit(f"[RISK-SKIP] {loc.name} {date_str} | {risk_check['reason']}")
+                            self._scan_stats["risk_skips"] += 1
                             continue
 
                         ai_note = ""
                         ai_result = self._review_signal_with_ai(loc, snap, signal, unit_sym)
                         if not ai_result["allowed"]:
-                            self.engine.emit(f"[AI-SKIP] {loc.name} {date_str} | {ai_result['reason']}")
+                            ai_reason = ai_result['reason']
+                            # Include AI's structured justification if available
+                            if ai_result.get("review"):
+                                review = ai_result["review"]
+                                ai_detail = review.get("reason", "")
+                                if ai_detail:
+                                    ai_reason = f"{ai_reason}:{ai_detail}"
+                            self.engine.emit(f"[AI-SKIP] {loc.name} {date_str} | {ai_reason}")
+                            self._scan_stats["ai_skips"] += 1
                             self._log_rejection(
                                 city_slug,
                                 outcome.get("question", ""),
@@ -350,7 +376,7 @@ class MarketScanner:
                                 prob_model,
                                 market_price,
                                 edge,
-                                f"ai_rejected:{ai_result['reason']}",
+                                f"ai_rejected:{ai_reason}",
                             )
                             continue
                         if ai_result.get("review"):
@@ -399,6 +425,24 @@ class MarketScanner:
             state.balance = round(balance, 2)
             state.peak_balance = max(state.peak_balance, balance)
             self.engine.storage.save_state(state)
+
+        # Emit scan summary
+        stats = self._scan_stats
+        summary = (
+            f"[SCAN-SUMMARY] candidates={stats['candidates']} | "
+            f"liquidity_skips={stats['liquidity_skips']} | "
+            f"risk_skips={stats['risk_skips']} | "
+            f"ai_skips={stats['ai_skips']} | "
+            f"other_skips={stats['other_skips']} | "
+            f"executed={result.new_trades}"
+        )
+        self.engine.emit(summary)
+        # Update ScanResult
+        result.candidates = stats["candidates"]
+        result.liquidity_skips = stats["liquidity_skips"]
+        result.risk_skips = stats["risk_skips"]
+        result.ai_skips = stats["ai_skips"]
+        result.other_skips = stats["other_skips"]
 
         return result
 
@@ -613,7 +657,8 @@ class MarketScanner:
             )
 
             if not filter_result["passed"]:
-                # Log rejection
+                # Log rejection and track stats
+                reason = filter_result.get("rejected_reason", "unknown")
                 self._log_rejection(
                     city_slug,
                     outcome.get("question", ""),
@@ -621,8 +666,13 @@ class MarketScanner:
                     prob_model,
                     market_price,
                     edge,
-                    filter_result.get("rejected_reason", "unknown")
+                    reason
                 )
+                # Track liquidity vs other skips
+                if "depth_too_low" in reason or "crossed" in reason:
+                    self._scan_stats["liquidity_skips"] += 1
+                else:
+                    self._scan_stats["other_skips"] += 1
                 continue
 
             # Run Signal Quality Layer validation
@@ -667,9 +717,15 @@ class MarketScanner:
                 getattr(self.engine.config, "max_position_pct", 0.02),
                 getattr(self.engine.config, "max_market_exposure_pct", 0.05)
             )
-            final_size = max(0.0, capped_size)
+            final_size = min(max(0.0, capped_size), self._max_bet_for_mode())
 
-            if final_size < 0.50:
+            # If liquidity filter adjusted the size, use that instead (point 7)
+            if outcome.get("adjusted_size"):
+                final_size = min(float(outcome["adjusted_size"]), final_size)
+                if outcome.get("liquidity_note"):
+                    candidate_features["liquidity_note"] = outcome["liquidity_note"]
+
+            if final_size < self._min_trade_size_for_mode():
                 continue
 
             opportunities.append({

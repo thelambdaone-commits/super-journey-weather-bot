@@ -73,8 +73,22 @@ class LiquidityFilter:
                 reason="crossed_or_invalid_book",
                 metrics={"bid": bid, "ask": ask},
             )
-        depth = self._depth_at_price(orderbook or outcome.get("orderbook"), ask) if orderbook else float(outcome.get("volume", 0))
+        ob = orderbook or outcome.get("orderbook")
+        depth = self._depth_at_price(ob, ask) if ob else float(outcome.get("volume", 0))
         passed = depth >= self.min_depth_usd
+        if not passed:
+            # Instead of reject, suggest size reduction
+            from src.strategy.sizing import reduce_size_to_liquidity
+            intended = float(outcome.get("intended_size", 10.0))
+            adjusted, reason = reduce_size_to_liquidity(intended, ob, ask, self.min_depth_usd)
+            if adjusted > 0:
+                outcome["adjusted_size"] = adjusted
+                outcome["liquidity_note"] = reason
+                return FilterResult(
+                    passed=True,
+                    reason=f"size_reduced ({reason})",
+                    metrics={"depth_usd": depth, "min_depth_usd": self.min_depth_usd, "ask": ask, "adjusted_size": adjusted},
+                )
         return FilterResult(
             passed=passed,
             reason="" if passed else f"depth_too_low ({depth:.1f} < {self.min_depth_usd})",

@@ -337,9 +337,65 @@ git status --short
 ```
 
 For paper/resolver changes, also run:
-
 ```bash
 ./venv/bin/python -m pytest tests/test_paper_logic.py -q
+```
+
+---
+## Recent Improvements (2026-05-04)
+
+### 1. Ouroboros Isolated (Stability)
+- Ouroboros now runs in a subprocess with timeout (`engine.py:404-418`)
+- Config: `OUROBOROS_ENABLED=True`, `OUROBOROS_TIMEOUT=300`
+- Prevents bot from blocking during auto-improvement
+
+### 2. Heartbeat + Watchdog (Reliability)
+- `State.last_heartbeat` updated after each scan cycle (`storage/__init__.py:73`)
+- `scripts/watchdog.py` monitors heartbeat and restarts bot if stuck
+- Add to cron: `0 * * * * cd /home/74h2hfpyj79x/weatherbot && python3 scripts/watchdog.py`
+
+### 3. Scan Summary (Diagnosability)
+- Each scan emits: `[SCAN-SUMMARY] candidates=N | liquidity_skips=N | risk_skips=N | ai_skips=N | other_skips=N | executed=N`
+- Tracked in `ScanResult` (`trading/types.py`)
+
+### 4. AI Filter Justification (Transparency)
+- AI rejections now include structured reason from Groq
+- Logged in `logs/rejections.jsonl` with full AI detail
+
+### 5. Config Alignment (Consistency)
+- Added missing fields: `MAX_EXPOSURE_PER_CITY`, `MAX_EXPOSURE_PER_REGION`, etc. to `Config`
+- Renamed `confirm_live_trading` → `live_trade_confirm` (aligned with .env.example)
+
+### 6. Sizing Test (Safety)
+- Added `tests/test_sizing_max_bet.py` to guarantee `find_all_opportunities()` never exceeds `max_bet`
+
+### 7. Liquidity Reduction (Fewer False Rejections)
+- `LiquidityFilter` now reduces size to available liquidity instead of rejecting
+- New function `reduce_size_to_liquidity()` in `src/strategy/sizing.py`
+
+---
+
+## Testing
+
+```bash
+# Run sizing tests
+python3 -m unittest tests.test_sizing_max_bet -v
+
+# Run all tests
+python3 -m unittest discover tests -v
+```
+
+---
+
+## Watchdog Setup
+
+```bash
+# Make executable
+chmod +x scripts/watchdog.py
+
+# Add to crontab (runs every hour)
+crontab -e
+# Add: 0 * * * * cd /home/74h2hfpyj79x/weatherbot && python3 scripts/watchdog.py
 ```
 
 ---

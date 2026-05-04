@@ -19,6 +19,11 @@ class ScanResult:
     new_trades: int = 0
     closed: int = 0
     resolved: int = 0
+    candidates: int = 0
+    liquidity_skips: int = 0
+    risk_skips: int = 0
+    ai_skips: int = 0
+    other_skips: int = 0
 
 class EngineFeedback(Protocol):
     """Decoupled feedback channel for engine events."""
