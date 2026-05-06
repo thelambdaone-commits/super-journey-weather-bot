@@ -16,22 +16,22 @@ TRADING_FEE_PERCENT = 0.01  # 1% conservative estimate for taker fees/slippage
 
 class MarketResolver:
     """Logic for resolving markets and calculating PnL with real-time actuals."""
-    
+
     def __init__(self, engine):
         self.engine = engine
         self._last_poll_cache = {}
-    
+
     def poll_actual(self, city_slug: str, date_str: str) -> float | None:
         """Poll actual temperature with caching."""
         cache_key = f"{city_slug}:{date_str}"
         if cache_key in self._last_poll_cache:
             return self._last_poll_cache[cache_key]
-        
+
         station = "GENERIC"
         if is_enabled("V3_STATION_PRECISION"):
             station_info = get_station_info(city_slug)
             station = station_info["code"]
-        
+
         actual = get_actual_temp(city_slug, date_str, station=station)
         if actual is not None:
             self._last_poll_cache[cache_key] = actual
@@ -169,20 +169,20 @@ class MarketResolver:
             )
 
         return balance, won, pnl
-    
+
     def auto_resolve_pending(self) -> dict:
         """Auto-resolve all pending markets using real-time actuals and update state."""
         resolved_count = 0
         results = {"resolved": [], "failed": [], "pending": []}
         state = self.engine.storage.load_state()
         initial_balance = state.balance
-        
+
         for market in self.engine.storage.load_all_markets():
             if market.status == "resolved":
                 continue
             if not market.position and not market.paper_position:
                 continue
-            
+
             # Poll actual temperature
             if market.city and market.date:
                 actual = self.poll_actual(market.city, market.date)
@@ -196,7 +196,7 @@ class MarketResolver:
                             state.balance = new_balance
                             if won: state.wins += 1
                             else: state.losses += 1
-                        
+
                         # Trust Engine Update
                         resolved_pos = market.position or market.paper_position or {}
                         display_pnl = pnl if pnl is not None else resolved_pos.get("pnl", 0.0)
@@ -249,11 +249,11 @@ class MarketResolver:
                     "city": market.city,
                     "reason": "missing_data"
                 })
-        
+
         if resolved_count > 0:
             state.peak_balance = max(state.peak_balance, state.balance)
             self.engine.storage.save_state(state)
-            
+
         results["total"] = resolved_count
         results["pnl"] = state.balance - initial_balance
         return results
@@ -262,25 +262,25 @@ class MarketResolver:
         """Get recent forecast errors for edge adjustment."""
         from pathlib import Path
         from ..data.loader import load_rows
-        
+
         errors_by_source = {}
-        
+
         # Load dataset rows
         dataset_path = Path(self.engine.config.data_dir) / "dataset_rows.jsonl"
         rows = load_rows(dataset_path)
-        
+
         for row in rows:
             if row.actual_temp is None:
                 continue
             if row.forecast_temp is None:
                 continue
-            
+
             source = row.forecast_source or "unknown"
             err = row.forecast_temp - row.actual_temp
             if source not in errors_by_source:
                 errors_by_source[source] = []
             errors_by_source[source].append(err)
-        
+
         # Calculate stats
         result = {}
         import numpy as np
@@ -292,7 +292,7 @@ class MarketResolver:
                 "mae": float(np.mean(np.abs(arr))),
                 "n": len(errors)
             }
-        
+
         return result
 
     def should_retrain(self, min_resolutions: int = 10) -> tuple[bool, str]:
@@ -301,24 +301,24 @@ class MarketResolver:
         for market in self.engine.storage.load_all_markets():
             if market.status == "resolved" and market.actual_temp:
                 recent_count += 1
-        
+
         if recent_count >= min_resolutions:
             return True, f"{recent_count} résolutions récentes"
-        
+
         return False, f"Pas assez: {recent_count}/{min_resolutions}"
 
     def check_and_trigger_retrain(self, min_resolutions: int = 10) -> tuple[bool, str]:
         """Check if should retrain and optionally trigger."""
         should_train, reason = self.should_retrain(min_resolutions)
-        
+
         if should_train:
             # Get recent errors for adjustment
             errors = self.get_recent_errors(days=7)
             ecmwf_bias = errors.get('ecmwf', {}).get('mean', 0)
             hrrr_bias = errors.get('hrrr', {}).get('mean', 0)
-            
+
             return True, f"{reason} | ECMWF: {ecmwf_bias:+.2f}°C | HRRR: {hrrr_bias:+.2f}°C"
-        
+
         return False, reason
 
     def resolve_market(self, market, balance: float):
@@ -353,6 +353,8 @@ class MarketResolver:
             pos = market.position
             price, size, shares = pos["entry_price"], pos["cost"], pos["shares"]
             fee = size * TRADING_FEE_PERCENT
+            # PnL = (shares * (1 - price)) - fee for win, or -size - fee for loss
+            # This matches the paper_account.record_result() expectation
             pnl = round(shares * (1 - price) - fee, 2) if live_won else round(-size - fee, 2)
             balance = balance + size + pnl
             pos.update({
@@ -378,8 +380,14 @@ class MarketResolver:
         if paper_open and paper_won is not None:
             pos = market.paper_position
             price, size, shares = pos["entry_price"], pos["cost"], pos["shares"]
+            # Calculate PnL consistently:
+            # For win: shares * (1 - price) - fee (shares = size/price)
+            # For loss: -size - fee
             fee = size * TRADING_FEE_PERCENT
-            paper_pnl = round(shares * (1 - price) - fee, 2) if paper_won else round(-size - fee, 2)
+            if paper_won:
+                paper_pnl = round((shares * (1 - price)) - fee, 2)
+            else:
+                paper_pnl = round(-size - fee, 2)
 
             pos.update({
                 "exit_price": 1.0 if paper_won else 0.0,
@@ -455,7 +463,7 @@ class MarketResolver:
             pos = market.position or market.paper_position
             bucket = f"{pos['bucket_low']}-{pos['bucket_high']}{unit}"
             temp = f"{market.actual_temp}{unit}" if market.actual_temp is not None else "N/A"
-            
+
             # Use specific PnL for notification (prioritize live)
             display_pnl = pnl if pnl is not None else (market.paper_position.get("pnl") if market.paper_position else 0)
 

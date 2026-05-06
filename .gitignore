@@ -9,6 +9,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Virtual environments
 venv/
@@ -31,6 +37,8 @@ Thumbs.db
 /data/
 /logs/
 *.db
+*.sqlite
+*.sqlite3
 
 # Test and scratch directories (not committed)
 scratch/
@@ -41,6 +49,7 @@ data_test/
 *.lock
 data/backups/
 data/tuning_history.jsonl
-.coverage
 bot_output.log
 data/best_hyperparams.json
+audit_verdict.md
+logs/artifacts/

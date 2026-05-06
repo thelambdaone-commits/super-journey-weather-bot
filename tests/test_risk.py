@@ -63,7 +63,7 @@ class TestPortfolioRiskManager(unittest.TestCase):
 
     def setUp(self):
         self.config = Config()
-        self.config.max_exposure_per_city = 100.0
+        self.config.max_exposure_per_city = 300.0
         self.config.max_exposure_per_region = 250.0
         self.config.max_exposure_per_cluster = 300.0
         self.config.max_total_exposure = 1000.0
@@ -72,11 +72,49 @@ class TestPortfolioRiskManager(unittest.TestCase):
         """Exceeding city limit should be rejected."""
         from src.strategy.risk_manager import PortfolioRiskManager
         rm = PortfolioRiskManager(self.config)
-        # Simulate open positions: city "london" already has $90 exposure
-        open_markets = [type('M', (), {'position': {'status': 'open', 'cost': 90.0}, 'city': 'london'})()]
+        # Simulate open positions: city "london" already has $290 exposure
+        open_markets = [type('M', (), {'position': {'status': 'open', 'cost': 290.0}, 'city': 'london'})()]
         result = rm.check_new_trade(city='london', cost=20.0, open_markets=open_markets)
         self.assertFalse(result['allowed'])
         self.assertIn('city_concentration_limit', result['reason'])
+
+    def test_paper_positions_count_toward_city_limit(self):
+        """Open paper positions should count as exposure."""
+        from src.strategy.risk_manager import PortfolioRiskManager
+        rm = PortfolioRiskManager(self.config)
+        open_markets = [
+            type(
+                'M',
+                (),
+                {
+                    'position': None,
+                    'paper_position': {'status': 'open', 'cost': 290.0},
+                    'city': 'atlanta',
+                },
+            )()
+        ]
+        result = rm.check_new_trade(city='atlanta', cost=20.0, open_markets=open_markets)
+        self.assertFalse(result['allowed'])
+        self.assertIn('city_concentration_limit', result['reason'])
+
+    def test_closed_and_resolved_positions_do_not_count_as_exposure(self):
+        """Closed/resolved market files should not create ghost exposure."""
+        from src.strategy.risk_manager import PortfolioRiskManager
+        rm = PortfolioRiskManager(self.config)
+        open_markets = [
+            type(
+                'M',
+                (),
+                {
+                    'status': 'resolved',
+                    'position': {'status': 'open', 'cost': 500.0},
+                    'paper_position': {'status': 'closed', 'cost': 500.0},
+                    'city': 'atlanta',
+                },
+            )()
+        ]
+        result = rm.check_new_trade(city='atlanta', cost=20.0, open_markets=open_markets)
+        self.assertTrue(result['allowed'])
 
     def test_total_exposure_limit(self):
         """Exceeding total exposure should be rejected."""

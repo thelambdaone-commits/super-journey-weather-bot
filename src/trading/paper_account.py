@@ -78,21 +78,17 @@ class PaperAccount:
         return self.stats
 
     def record_trade(self, cost: float):
-        """Record a new paper trade entry and lock stake plus entry friction."""
+        """Record a new paper trade entry and lock stake (fees handled in resolver PnL)."""
         if cost <= 0:
             raise ValueError("paper trade cost must be positive")
 
         self.stats.total_trades += 1
 
-        # Apply entry friction (fee + slippage)
-        entry_friction = cost * (self.FEE_RATE + self.SLIPPAGE_RATE)
-        total_deduction = cost + entry_friction
-
-        self.stats.total_fees_paid += entry_friction
-        # Lock stake in open positions for equity calculation
+        # Lock only the stake in open positions for equity calculation
+        # Fees are deducted in the resolver's PnL calculation, not here
         self.stats.locked_in_positions += cost
         # DO NOT update total_pnl here - only update on resolution
-        self.stats.balance = round(self.stats.balance - total_deduction, 2)
+        self.stats.balance = round(self.stats.balance - cost, 2)
 
         # Update peak equity (cash + locked positions)
         equity = self.get_equity()
@@ -394,10 +390,9 @@ class PaperAccount:
 
         self.stats.closed_trades = self.stats.wins + self.stats.losses
         self.stats.open_trades = len(open_records)
-        if open_records:
-            self.stats.locked_in_positions = round(
-                sum(float(trade.get("stake", 0.0) or 0.0) for trade in open_records), 2
-            )
+        self.stats.locked_in_positions = round(
+            sum(float(trade.get("stake", 0.0) or 0.0) for trade in open_records), 2
+        )
 
         detailed_trade_count = self.stats.closed_trades + self.stats.open_trades
         has_complete_detailed_count = has_detail and detailed_trade_count > 0

@@ -22,9 +22,9 @@ class TestEdgeFunctions(unittest.TestCase):
 
     def test_gross_edge(self):
         # model_prob > market_price => positive edge
-        self.assertAlmostEqual(gross_edge(0.80, 0.70), 0.10, places=4)
+        self.assertAlmostEqual(gross_edge(0.80, 0.70), 0.1429, places=4)
         # model_prob < market_price => negative edge
-        self.assertAlmostEqual(gross_edge(0.60, 0.70), -0.10, places=4)
+        self.assertAlmostEqual(gross_edge(0.60, 0.70), -0.1429, places=4)
         # equal
         self.assertAlmostEqual(gross_edge(0.70, 0.70), 0.0, places=4)
 
@@ -34,9 +34,8 @@ class TestEdgeFunctions(unittest.TestCase):
             estimated_fee_bps = 10.0  # 10 bps = 0.1%
 
         config = MockConfig()
-        # fee as probability-equivalent
+        # fee as ROI impact; legacy call shape remains supported.
         fee = estimate_fee(0.70, 100.0, config)
-        expected = (100.0 * 0.001) / 100.0  # fee_usd / size = 0.001
         self.assertAlmostEqual(fee, 0.001, places=4)
 
     def test_estimate_slippage(self):
@@ -56,8 +55,8 @@ class TestEdgeFunctions(unittest.TestCase):
         fee = 0.005  # 0.5%
         slippage = 0.002
         result = net_ev(model_prob, entry_price, fee, slippage)
-        # 0.80 - 0.70 - 0.005 - 0.002 = 0.093
-        self.assertAlmostEqual(result, 0.093, places=4)
+        # ((0.80 - 0.70) / 0.70) - 0.005 - 0.002 = 0.135857...
+        self.assertAlmostEqual(result, 0.1359, places=4)
 
     def test_net_ev_negative(self):
         model_prob = 0.70

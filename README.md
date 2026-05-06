@@ -2,7 +2,7 @@
 
 WeatherBot is a Python research and paper-trading system for weather prediction markets. It scans Polymarket weather markets, collects forecasts, estimates fair value, filters risky opportunities, sends Telegram alerts, records paper trades, resolves markets, and keeps enough data for audit and model improvement.
 
-Current status on 2026-04-27: paper trading and signal mode are operational. Live trading is disabled by default and guarded by explicit runtime and environment checks.
+Current status on 2026-05-06: paper trading and signal mode are operational. Live trading is disabled by default and guarded by explicit runtime and environment checks. The current scanner is configured to seek positive ROI opportunities after estimated fees and slippage, while preserving paper-only validation as the default posture.
 
 Repository: `git@github.com:thelambdaone-commits/super-journey-weather-bot.git`
 
@@ -66,8 +66,8 @@ weatherbot/
 ```text
 scan markets
   -> fetch forecasts and market/orderbook data
-  -> estimate probability and edge
-  -> apply filters, risk checks, and AI review
+  -> estimate probability, gross ROI, and net ROI
+  -> apply EV, liquidity, confidence, risk, and optional AI checks
   -> record paper trade and/or send signal
   -> resolve open positions when market outcome is available
   -> update paper account, state, logs, and feedback datasets
@@ -96,8 +96,8 @@ Entry:
 
 - `record_trade(cost)` increments total trades.
 - The stake is locked from paper cash.
-- Entry friction is charged as `FEE_RATE + SLIPPAGE_RATE`.
-- Entry friction is included in net paper PnL.
+- Entry fees and slippage are not charged twice at opening.
+- Fees/slippage are modeled in the resolver-calculated net PnL.
 
 Settlement:
 
@@ -143,7 +143,10 @@ Minimum useful variables:
 PAPER_MODE=True
 SIGNAL_MODE=True
 LIVE_TRADE=False
-SCAN_INTERVAL=3600
+SCAN_INTERVAL=10800
+MIN_EV=0.05
+MIN_EDGE=0.05
+MIN_PROBABILITY=0.35
 AI_FLOW_ENABLED=False
 SIGNAL_FLOW_ENABLED=True
 GROQ_API_KEY=...
@@ -233,11 +236,12 @@ Run paper-specific tests:
 ./venv/bin/python -m pytest tests/test_paper_logic.py -q
 ```
 
-Current local validation on 2026-04-27:
+Current local validation on 2026-05-06:
 
-- `tests/test_paper_logic.py`: 8 passed
-- full suite: 15 passed
-- coverage gate: 89% on the current paper-account baseline, with `--cov-fail-under=80`
+- full suite: 138 passed
+- coverage gate: 82.18% on the current paper-account baseline, with `--cov-fail-under=80`
+- `./venv/bin/ruff check .`: clean
+- `./venv/bin/python -m pip check`: clean
 - `git diff --check`: clean
 
 GitHub Actions runs the same lint, format, dependency, and coverage checks on every push and pull request to `main`. Workflow permissions are restricted to `contents: read`. Dependabot is enabled weekly for both pip dependencies and GitHub Actions.
@@ -312,14 +316,13 @@ sudo systemctl status weatherbot
 
 ## Operational Status
 
-Last verified locally on 2026-04-27:
+Last verified locally on 2026-05-06:
 
-- Bot mode: `paper_mode,signal_mode,tui_off`
+- Bot mode: `paper_mode,signal_mode,live_off`
 - Live trading: disabled
-- APIs during network-enabled run: Telegram connected, Groq connected, Polymarket connected, Open-Meteo connected
-- Bot status: balance `$9,879.24`, 6 resolved live/state trades, 33% win rate
-- Paper report: separate paper account active with paper trades and open paper positions
-- Latest scan outcome: no new paper trade when AI/orderbook filters rejected candidates
+- Edge model: ROI-based gross edge and net EV after estimated fee/slippage
+- Paper accounting: stake locked at entry, resolver PnL handles fees/slippage
+- Current audit posture: promising, but live trading remains No-Go until paper metrics show statistically persistent positive performance
 
 No result in this repository should be interpreted as investment advice. This system is experimental research software and must be validated over a long paper-trading period before any real capital is considered.
 
@@ -340,6 +343,29 @@ For paper/resolver changes, also run:
 ```bash
 ./venv/bin/python -m pytest tests/test_paper_logic.py -q
 ```
+
+---
+## Recent Improvements (2026-05-06)
+
+### ROI-Based Selection
+- Edge calculations now use ROI terms: `(model_probability - entry_price) / entry_price`.
+- Net EV subtracts estimated fee and orderbook slippage before filters and ranking.
+- Scanner sorts candidates by net EV and requires positive configured thresholds instead of "trade everything" diagnostics.
+
+### Paper Accounting Coherence
+- `record_trade()` locks only stake.
+- `resolver.py` owns settlement PnL, including fees.
+- Paper account rebuild clears stale locked stake when no open paper positions remain.
+
+### Risk and Exposure Hygiene
+- Open paper positions count toward portfolio exposure.
+- Closed and resolved positions no longer create ghost exposure.
+- City slug aliases cover hyphen and underscore variants for regional caps.
+
+### Validation
+- Full test suite: 138 passed.
+- Coverage gate reached: 82.18%.
+- Ruff and dependency checks are clean.
 
 ---
 ## Recent Improvements (2026-05-04)

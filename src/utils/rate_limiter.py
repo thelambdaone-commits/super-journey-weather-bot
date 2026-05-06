@@ -8,6 +8,7 @@ Features: cache, retry with exponential backoff, circuit breaker.
 from __future__ import annotations
 import time
 import logging
+import threading
 from typing import Dict, Optional, Callable, Any
 from datetime import datetime, timedelta
 from functools import wraps
@@ -21,7 +22,7 @@ class RateLimiter:
     Also provides circuit breaker pattern for persistent failures.
     """
 
-    def __init__(self, max_calls: int = 60, window_seconds: int = 60, 
+    def __init__(self, max_calls: int = 60, window_seconds: int = 60,
                  max_retries: int = 5, backoff_base: float = 0.25):
         self.max_calls = max_calls
         self.window_seconds = window_seconds

@@ -25,32 +25,33 @@ class Config:
     # Trading core
     balance: float = 10000.0
     max_bet: float = 20.0
-    min_ev: float = 0.015  # Lowered for opportunistic trading (was 0.10)
+    min_ev: float = 0.05  # ROI-based: 5% minimum return (was 0.015 absolute)
     max_price: float = 0.70  # Increased to allow more opportunities (was 0.45)
     min_volume: int = 50  # Lowered for opportunistic trading (was 500)
     min_hours: int = 2
     max_hours: int = 72
-    kelly_fraction: float = 0.25
+    min_probability: float = 0.35  # Avoid low-probability lottery buckets
+    kelly_fraction: float = 0.10
     max_slippage: float = 0.10  # Increased tolerance (was 0.03)
     scan_interval: int = 10800  # 3 hours aligned with weather model runs (was 3600)
 
     # New required config fields (original plan + additions)
-    min_edge: float = 0.015  # Opportune edge threshold (was 0.06)
+    min_edge: float = 0.05  # Require at least 5% gross ROI before deeper checks
     max_spread: float = 0.10  # Increased tolerance (was 0.05)
-    max_position_pct: float = 0.02  # 2% bankroll per trade
+    max_position_pct: float = 0.01  # 1% bankroll per trade (Phase 1: reduced from 2%)
     max_market_exposure_pct: float = 0.05  # 5% max exposure per market
     max_daily_drawdown: float = 0.05  # 5% daily drawdown limit
     estimated_fee_bps: float = 10.0  # 10 bps = 0.1% fee
     estimated_slippage_bps: float = 5.0  # 5 bps = 0.05% slippage
     require_positive_net_ev: bool = True
-    min_orderbook_depth_usd: float = 5.0  # Min orderbook depth (was 100.0)
+    min_orderbook_depth_usd: float = 2.0  # Lowered for better opportunities (was 5.0)
     max_orders_per_minute: int = 10  # Live safety (point 7)
     kill_switch_enabled: bool = False  # Global kill switch (point 7)
     calibration_min: int = 30
     # Exposure limits (aligned with .env.example)
-    max_exposure_per_city: float = 100.0
-    max_exposure_per_region: float = 250.0
-    max_exposure_per_cluster: float = 300.0
+    max_exposure_per_city: float = 300.0
+    max_exposure_per_region: float = 750.0
+    max_exposure_per_cluster: float = 900.0
     max_total_exposure: float = 1000.0
     paper_mode: bool = False
     live_trade: bool = False
@@ -58,7 +59,7 @@ class Config:
     signal_mode: bool = True
     tui_mode: bool = False
     dashboard_enabled: bool = True
-    signal_min_ev: float = 0.05
+    signal_min_ev: float = 0.05  # ROI-based: 5% minimum return
     signal_min_prob: float = 0.75
     signal_max_uncertainty: float = 0.18
     signal_rate_limit_hour: int = 3
@@ -70,22 +71,22 @@ class Config:
     report_min_signal_price: float = 0.01
 
     # Dual Flow Configuration
-    ai_flow_enabled: bool = False
+    ai_flow_enabled: bool = False  # Optional diagnostics/review layer
     ai_min_confidence: float = 0.50
     ai_max_ev_threshold: float = 2.0
     ai_allow_low_confidence_high_ev: bool = False
-    ai_force_blocking: bool = False  # False = parallel mode (max profit)
+    ai_force_blocking: bool = False  # Keep AI non-blocking unless explicitly enabled
     ai_max_reviews_per_scan: int = 5
 
     signal_flow_enabled: bool = True
     signal_min_quality_score: float = 0.60
-    signal_min_confidence: float = 0.50
-    signal_min_edge: float = 0.05
+    signal_min_confidence: float = 0.05  # Diagnostic-safe threshold; quality gate remains stricter
+    signal_min_edge: float = 0.05  # ROI-based signal edge threshold
     signal_bayesian_penalty_max: float = 0.30
 
     # Paper training mode: looser thresholds, smaller stakes, live unaffected.
     paper_training_mode: bool = True
-    paper_training_min_ev: float = 0.02
+    paper_training_min_ev: float = 0.03  # ROI-based: 3% minimum return for training
     paper_training_max_price: float = 0.75
     paper_training_max_spread: float = 0.10
     paper_training_min_volume: int = 100
@@ -117,6 +118,7 @@ class Config:
     # API Keys
     meteoblue_key: str = ""
     weatherbit_key: str = ""
+    dwd_enabled: bool = False  # DWD API disabled by default (DNS issues)
 
     # Telegram
     telegram_bot_token: str = ""

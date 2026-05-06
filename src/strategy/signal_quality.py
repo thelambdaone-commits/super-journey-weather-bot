@@ -82,8 +82,8 @@ class SignalQualityLayer:
         self.fair_value_engine = get_fair_value_engine()
 
         # Thresholds
-        self.MIN_CONFIDENCE = getattr(config, "signal_min_confidence", 0.50)
-        self.MIN_EDGE = getattr(config, "signal_min_edge", 0.02)
+        self.MIN_CONFIDENCE = getattr(config, "signal_min_confidence", 0.05)
+        self.MIN_EDGE = getattr(config, "signal_min_edge", 0.05)
         self.STALE_SECONDS = 300
         self.COOLDOWN_HOURS = 12
 
@@ -124,7 +124,7 @@ class SignalQualityLayer:
         quality_score = self.compute_quality(signal)
 
         # 3. Check minimum quality threshold
-        min_quality = getattr(self.config, "signal_min_quality_score", 0.40)
+        min_quality = getattr(self.config, "signal_min_quality_score", 0.60)
 
         return {
             "accepted": quality_score >= min_quality,
@@ -155,7 +155,7 @@ class SignalQualityLayer:
         if is_enabled("SENTIMENT_WEIGHTED_SIGNALS"):
             try:
                 sentiment_boost = self.sentiment_analyzer.analyze_signal(signal.city, signal.question)
-            except (Exception,) as e:
+            except (Exception,):
                 pass
 
         # 6. Fair Value Alpha (#7 - V3 Improvement)

@@ -2,7 +2,7 @@
 Edge and EV calculations.
 
 Net EV formula:
-    net_ev = model_probability - entry_price - estimated_fee_probability - estimated_slippage_probability
+    net_ev = ((model_probability - entry_price) / entry_price) - fee_roi - slippage_roi
 
 All functions are pure where possible for testability.
 """
@@ -65,28 +65,37 @@ def implied_probability_from_price(price: float) -> float:
 
 
 def gross_edge(model_probability: float, market_price: float) -> float:
-    """Gross edge: model_prob - market_price (before fees/slippage)."""
-    return model_probability - market_price
+    """Gross edge as ROI: (model_prob - market_price) / market_price (before fees/slippage)."""
+    if market_price <= 0:
+        return 0.0
+    return (model_probability - market_price) / market_price
 
 
-def estimate_fee(price: float, size: float, config) -> float:
-    """Estimate fee in USD. Returns fee as probability-equivalent."""
-    fee_bps = getattr(config, "estimated_fee_bps", 10.0)
-    fee_usd = size * (fee_bps / 10000.0)
-    # Convert to probability-equivalent: fee as fraction of position
-    return fee_usd / size if size > 0 else fee_bps / 10000.0
+def estimate_fee(*args) -> float:
+    """Estimate fee as ROI impact.
 
-
-def estimate_slippage(orderbook: dict, size: float, side: str = "buy") -> float:
+    Accepts both ``estimate_fee(config)`` and the legacy
+    ``estimate_fee(price, size, config)`` call shape.
     """
-    Estimate slippage in USD using orderbook depth.
-    Returns slippage as probability-equivalent.
+    config = args[-1] if args else None
+    fee_bps = getattr(config, "estimated_fee_bps", 10.0)
+    return fee_bps / 10000.0
+
+
+def estimate_slippage(orderbook: dict, size: float, side: str = "buy", entry_price: float = 0.0) -> float:
+    """
+    Estimate slippage as ROI impact (fraction of investment).
+    Returns slippage as a fraction of entry price.
+    size is in USD to spend.
     """
     if not orderbook:
         return 0.0
     levels = orderbook.get("asks" if side == "buy" else "bids", [])
-    remaining = size
-    total_cost = 0.0
+    if not levels:
+        return 0.0
+    remaining_usd = size
+    total_usd_spent = 0.0
+    total_shares = 0.0
     if levels and isinstance(levels[0], dict):
         best_price = float(levels[0].get("price", 0.0))
     else:
@@ -99,24 +108,35 @@ def estimate_slippage(orderbook: dict, size: float, side: str = "buy") -> float:
             price = float(level[0])
             size_shares = float(level[1])
         avail_usd = size_shares * price
-        take = min(remaining, avail_usd)
-        total_cost += take * price
-        remaining -= take
-        if remaining <= 0:
+        take_usd = min(remaining_usd, avail_usd)
+        shares_bought = take_usd / price if price > 0 else 0
+        total_usd_spent += take_usd
+        total_shares += shares_bought
+        remaining_usd -= take_usd
+        if remaining_usd <= 0:
             break
-    if size <= 0:
+    if total_shares <= 0:
         return 0.0
-    avg_price = total_cost / size if total_cost > 0 else best_price
-    slippage_prob = avg_price - best_price if best_price > 0 else 0.0
-    return max(slippage_prob, 0.0)
+    avg_price = total_usd_spent / total_shares
+    # Convert to ROI terms: (avg_price - entry_price) / entry_price
+    reference_price = entry_price if entry_price > 0 else best_price
+    if reference_price > 0:
+        slippage_roi = (avg_price - reference_price) / reference_price
+    else:
+        slippage_roi = 0.0
+    return max(slippage_roi, 0.0)
 
 
 def net_ev(model_probability: float, entry_price: float, fee: float, slippage: float) -> float:
     """
-    Net EV after fees and slippage.
-    fee and slippage are probability-equivalent (0-1 scale).
+    Net EV as return on investment after fees and slippage.
+    EV = (model_prob - entry_price) / entry_price - fee - slippage
+    fee and slippage should be in ROI terms (fraction of investment).
     """
-    return model_probability - entry_price - fee - slippage
+    if entry_price <= 0:
+        return 0.0
+    gross_roi = (model_probability - entry_price) / entry_price
+    return gross_roi - fee - slippage
 
 
 def should_bet(net_ev_value: float, min_edge: float) -> bool:
@@ -136,18 +156,19 @@ def compute_edge(
     """
     Full edge computation matching the target architecture.
     Uses bid/ask spread, estimates fees and slippage.
+    All values now in ROI terms (return on investment).
     """
     spread = ask - bid if ask > bid else 0.0
     entry_price = ask  # conservative: assume we pay ask
     ge = gross_edge(model_probability, entry_price)
-    fee_prob = estimate_fee(entry_price, size, config)
-    slip_prob = estimate_slippage(orderbook or {}, size, side="buy")
-    ne = net_ev(model_probability, entry_price, fee_prob, slip_prob)
+    fee_roi = estimate_fee(config)
+    slip_roi = estimate_slippage(orderbook or {}, size, side="buy", entry_price=entry_price)
+    ne = net_ev(model_probability, entry_price, fee_roi, slip_roi)
     return EdgeEstimate(
         gross_edge=ge,
         net_ev=ne,
-        fee_probability=fee_prob,
-        slippage_probability=slip_prob,
+        fee_probability=fee_roi,
+        slippage_probability=slip_roi,
         entry_price=entry_price,
         model_probability=model_probability,
         spread=spread,

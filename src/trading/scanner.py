@@ -291,13 +291,14 @@ class MarketScanner:
                     # NEW: Score ALL buckets using range probability engine
                     self._scan_stats["candidates"] += 1
                     opportunities = self.find_all_opportunities(
-                        city_slug, loc, snap, outcomes, hours, base_features, balance
+                        city_slug, loc, snap, outcomes, hours, base_features, balance, date_str
                     )
 
                     # Iterate through opportunities (sorted by edge, highest first)
                     for opp in opportunities:
                         outcome = opp["outcome"]
                         prob_model = opp["prob"]
+                        raw_prob = opp.get("raw_prob", prob_model)
                         market_price = opp["price"]
                         edge = opp["edge"]
                         ev = opp["ev"]
@@ -321,10 +322,13 @@ class MarketScanner:
                             "shares": round(size / market_price, 2) if market_price > 0 else 0,
                             "cost": size,
                             "best_ask_size_usd": float(outcome.get("best_ask_size", 0.0)) * market_price,
-                            "raw_prob": round(bucket_prob(adjusted_temp, outcome["range"][0], outcome["range"][1], sigma), 4),
+                            "raw_prob": round(raw_prob, 4),
                             "p": round(prob_model, 4),
                             "ev": round(ev, 4),
                             "raw_ev": round(edge, 4),
+                            "gross_roi": round(edge, 4),
+                            "net_roi": round(ev, 4),
+                            "fees": round(0.01 + 0.015, 4),  # fee + slippage
                             "edge_penalties": {"source_bias": 0.0, "low_confidence": 0.0, "low_volume": 0.0},
                             "kelly": round(size / balance, 4) if balance > 0 else 0,
                             "forecast_temp": adjusted_temp,
@@ -345,6 +349,13 @@ class MarketScanner:
                             "opened_at": datetime.now(timezone.utc).isoformat(),
                             "status": "open",
                         }
+
+                        # Log selected trade for calibration tracking
+                        self._log_selected_trade(
+                            city_slug, date_str, bucket,
+                            raw_prob, prob_model, market_price,
+                            edge, ev, size
+                        )
 
                         # Risk check
                         open_markets = self.engine.storage.load_all_markets()
@@ -596,7 +607,7 @@ class MarketScanner:
 
         return max(base_sigma, sigma)
 
-    def find_all_opportunities(self, city_slug, loc, snap, outcomes, hours, base_features, balance):
+    def find_all_opportunities(self, city_slug, loc, snap, outcomes, hours, base_features, balance, date_str=None):
         """
         Score ALL buckets using range probability engine.
         This is the core of the pricing engine transformation.
@@ -611,14 +622,21 @@ class MarketScanner:
         base_sigma = 2.0 if loc.unit == "C" else 3.6
         sigma = self._calculate_dynamic_sigma(snap, base_sigma)
 
-        # Calculate probabilities for ALL buckets
-        all_probs = calculate_all_bucket_probs(float(forecast_temp), sigma, outcomes)
+        # Calculate probabilities for ALL buckets with conservative shrinkage.
+        calibration_factor = 0.85
+        all_probs = calculate_all_bucket_probs(float(forecast_temp), sigma, outcomes, calibration_factor)
+
+        date_str = date_str or ""
+
+        # Log calibration tracking data
+        self._log_calibration_data(city_slug, date_str, all_probs)
 
         opportunities = []
-        min_edge = getattr(self.engine.config, "min_edge", 0.015)
+        min_edge = getattr(self.engine.config, "min_edge", 0.05)
 
         for item in all_probs:
-            if item["edge_brut"] <= min_edge:
+            # Use edge_brut (ROI before fees) for filtering - more opportunities
+            if item.get("edge_brut", 0.0) <= min_edge:
                 continue
 
             outcome = item["outcome"]
@@ -626,33 +644,48 @@ class MarketScanner:
             market_price = item["price_market"]
             edge = item["edge_brut"]
 
+            # Phase 1: Filter by minimum probability
+            min_prob = getattr(self.engine.config, "min_probability", 0.35)
+            if prob_model < min_prob:
+                continue
+
             # Refresh orderbook for executable prices
             if not self._refresh_outcome_orderbook(outcome):
                 continue
+
+            # Update market_price from orderbook (use ask for buys)
+            market_price = float(outcome.get("ask", market_price))
 
             # Build features for this candidate
             candidate_features = dict(base_features)
             candidate_features.update(
                 self.engine.feature_engine.build(loc, snap, outcomes, hours, outcome)
             )
-            candidate_features["confidence"] = min(1.0, max(0.0, 1.0 - (sigma / 10.0)))
+            raw_confidence = 1.0 - (sigma / 10.0)
+            candidate_features["confidence"] = min(1.0, max(0.0, raw_confidence))
             candidate_features["sigma"] = sigma
 
-            # Calculate EV with proper fee/slippage estimation
-            volume = float(outcome.get("volume", 0))
-            from src.strategy.edge import gross_edge, net_ev, estimate_fee, estimate_slippage
+            # Calculate EV with proper fee/slippage estimation (ROI-based)
+            from src.strategy.edge import estimate_fee, estimate_slippage, net_ev
 
-            fee = estimate_fee(market_price, 10.0, self.engine.config)  # Estimate on $10 size
-            slippage = estimate_slippage(outcome.get("orderbook", {}), 10.0)
+            fee = estimate_fee(self.engine.config)  # Fee as ROI fraction
+            slippage = estimate_slippage(
+                outcome.get("orderbook", {}),
+                10.0,
+                side="buy",
+                entry_price=market_price,
+            )
+            slippage = min(slippage, getattr(self.engine.config, "max_slippage", 0.10))
             ev = net_ev(prob_model, market_price, fee, slippage)
 
             # Run filters (relaxed)
+            # Note: ev = net_ev (ROI-based), edge = edge_brut (ROI-based)
             filter_result = run_all_filters(
                 outcome,
                 candidate_features,
                 outcome.get("orderbook"),
-                ev,
-                edge,
+                ev,  # net_ev (ROI-based)
+                edge,  # gross_edge (ROI-based, was edge_brut)
                 self._filter_config_for_mode(),
             )
 
@@ -676,11 +709,13 @@ class MarketScanner:
                 continue
 
             # Run Signal Quality Layer validation
+            # Ensure confidence is at root level for Signal.from_dict()
             signal = Signal.from_dict(city_slug, {
                 "market_id": outcome["market_id"],
                 "entry_price": market_price,
                 "ev": ev,
                 "p": prob_model,
+                "confidence": candidate_features.get("confidence", 0.5),  # Root-level confidence
                 "spread": outcome.get("spread", 0.05),
                 "best_ask": outcome.get("ask", market_price),
                 "vwap_ask": outcome.get("vwap_ask", outcome.get("ask", market_price)),
@@ -740,10 +775,14 @@ class MarketScanner:
                 "features": candidate_features
             })
 
-        return sorted(opportunities, key=lambda x: x["edge"], reverse=True)
+        return sorted(
+            opportunities,
+            key=lambda x: x["ev"],  # Sort by net EV (ROI-based) for better opportunity selection
+            reverse=True
+        )
 
-    def _log_rejection(self, city, question, bucket, model_prob, market_price, edge, reason):
-        """Log EVERY rejection for analysis."""
+    def _log_rejection(self, city, question, bucket, model_prob, market_price, edge, reason, raw_prob=None):
+        """Log EVERY rejection for analysis (with calibration data)."""
         import json
         from pathlib import Path
         from datetime import datetime
@@ -752,19 +791,77 @@ class MarketScanner:
         log_path.parent.mkdir(exist_ok=True)
 
         try:
+            entry = {
+                "ts": datetime.utcnow().isoformat(),
+                "city": city,
+                "question": question,
+                "bucket": bucket,
+                "model_prob": round(model_prob, 4),
+                "raw_prob": round(raw_prob, 4) if raw_prob else None,
+                "market_price": round(market_price, 4),
+                "edge": round(edge, 4),
+                "reason": reason
+            }
             with open(log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps({
-                    "ts": datetime.utcnow().isoformat(),
-                    "city": city,
-                    "question": question,
-                    "bucket": bucket,
-                    "model_prob": round(model_prob, 4),
-                    "market_price": round(market_price, 4),
-                    "edge": round(edge, 4),
-                    "reason": reason
-                }) + "\n")
+                f.write(json.dumps(entry) + "\n")
         except (Exception,) as e:
             logging.getLogger(__name__).warning(f"Failed to log rejection: {e}")
+
+    def _log_calibration_data(self, city_slug, date_str, all_probs):
+        """Log calibration tracking data for adjusting calibration_factor."""
+        import json
+        from pathlib import Path
+        from datetime import datetime
+
+        log_path = Path("logs/calibration_tracking.jsonl")
+        log_path.parent.mkdir(exist_ok=True)
+
+        for item in all_probs:
+            try:
+                entry = {
+                    "ts": datetime.utcnow().isoformat(),
+                    "city": city_slug,
+                    "date": date_str,
+                    "bucket": item["bucket"],
+                    "raw_prob": round(item.get("raw_prob", 0.0), 4),
+                    "calibrated_prob": round(item["prob_model"], 4),
+                    "market_price": round(item["price_market"], 4),
+                    "gross_roi": round(item["edge_brut"], 4),
+                    "net_roi": round(item["edge_net"], 4),
+                    "spread": round(item["spread"], 4),
+                    "volume": item.get("volume", 0),
+                }
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry) + "\n")
+            except (Exception,) as e:
+                logging.getLogger(__name__).warning(f"Failed to log calibration data: {e}")
+
+    def _log_selected_trade(self, city, date_str, bucket, raw_prob, calibrated_prob, market_price, gross_roi, net_roi, size):
+        """Log selected trades for calibration verification."""
+        import json
+        from pathlib import Path
+        from datetime import datetime
+
+        log_path = Path("logs/selected_trades.jsonl")
+        log_path.parent.mkdir(exist_ok=True)
+
+        try:
+            entry = {
+                "ts": datetime.utcnow().isoformat(),
+                "city": city,
+                "date": date_str,
+                "bucket": bucket,
+                "raw_prob": round(raw_prob, 4),
+                "calibrated_prob": round(calibrated_prob, 4),
+                "market_price": round(market_price, 4),
+                "gross_roi": round(gross_roi, 4),
+                "net_roi": round(net_roi, 4),
+                "size": round(size, 2),
+            }
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        except (Exception,) as e:
+            logging.getLogger(__name__).warning(f"Failed to log selected trade: {e}")
 
     def build_signal(self, outcome, estimate, edge, features, kelly, size, forecast_temp, best_source):
         """Build a signal dictionary."""
@@ -1083,7 +1180,6 @@ class MarketScanner:
                 signal["question"],
                 signal["market_id"],
                 note,
-                ai_note=format_ai_note(signal.get("ai")),
                 calibrated_prob=signal["p"],
                 market_prob=signal["entry_price"],
                 uncertainty=signal.get("edge_penalties", {}).get("uncertainty"),

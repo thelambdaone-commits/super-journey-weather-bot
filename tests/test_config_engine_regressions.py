@@ -16,7 +16,7 @@ def test_signal_min_confidence_is_defined_once():
     names = [field.name for field in fields(Config)]
 
     assert names.count("signal_min_confidence") == 1
-    assert Config().signal_min_confidence == 0.50
+    assert Config().signal_min_confidence == 0.05
 
 
 def test_engine_exposure_limit_uses_configured_total_limit_when_present():
@@ -31,6 +31,7 @@ def test_engine_exposure_limit_uses_configured_total_limit_when_present():
 def test_engine_exposure_limit_falls_back_to_balance_percentage():
     engine = TradingEngine.__new__(TradingEngine)
     config = Config()
+    config.max_total_exposure = None
     config.max_market_exposure_pct = 0.05
     engine.config = config
 

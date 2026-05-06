@@ -204,6 +204,7 @@ def run_all_filters(outcome: dict, features: dict, orderbook: Optional[dict],
         if isinstance(filt, LiquidityFilter):
             res = filt.check(outcome, orderbook)  # Pass orderbook directly
         elif isinstance(filt, EVFilter):
+            # Both net_ev and gross_edge are now ROI-based
             res = filt.check(net_ev, gross_edge)
         elif isinstance(filt, ConfidenceFilter):
             res = filt.check(features)

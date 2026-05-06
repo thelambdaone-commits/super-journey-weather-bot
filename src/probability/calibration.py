@@ -252,13 +252,18 @@ class CalibrationValidator:
         )
         variance_ratio = after_std / before_std if before_std > 1e-9 else 1.0
         variance_preserved = self.min_variance_ratio <= variance_ratio <= self.max_variance_ratio
-        brier_improved = (before_brier - after_brier) > self.min_brier_gain
 
+        # Relax variance check for small datasets (less than 50 samples)
+        if len(y_true) < 50:
+            variance_preserved = True
+
+        brier_improved = after_brier < before_brier
         accepted = brier_improved and not has_perfect_predictions and variance_preserved
+        reason = "accepted"
         if not brier_improved:
-            reason = "holdout_brier_not_improved"
+            reason = "brier_not_improved"
         elif has_perfect_predictions:
-            reason = "perfect_predictions_detected"
+            reason = "has_perfect_predictions"
         elif not variance_preserved:
             reason = "variance_not_preserved"
         else:

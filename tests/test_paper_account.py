@@ -47,12 +47,12 @@ def test_record_result_rejects_non_positive_cost(tmp_path):
 def test_record_trade_and_results_update_stats_and_report(tmp_path):
     account = PaperAccount(str(tmp_path))
 
-    # record_trade locks stake + fees (5% fee + slippage)
+    # record_trade locks only the stake; resolver PnL handles fees/slippage.
     account.record_trade(100.0)
     state = account.get_state()
     assert state.total_trades == 1
-    assert state.balance == 9898.0  # 10000 - 100 - 2 (fees)
-    assert state.total_fees_paid == 2.0
+    assert state.balance == 9900.0  # 10000 - 100 stake
+    assert state.total_fees_paid == 0.0
     assert state.locked_in_positions == 100.0  # Stake locked
 
     # record_result unlocks stake and adds pnl
@@ -189,3 +189,33 @@ def test_legacy_history_backfills_detailed_pnl_from_closed_markets(tmp_path):
     assert account.get_state().total_losses == 170.76
     assert account.get_state().total_pnl == -120.76
     assert "reconstructed_from_market" in history_file.read_text(encoding="utf-8")
+
+
+def test_recalc_clears_locked_positions_when_no_open_markets(tmp_path):
+    account_file = tmp_path / "paper_account.json"
+    account_file.write_text(
+        json.dumps({"locked_in_positions": 170.15, "balance": 9800.0}),
+        encoding="utf-8",
+    )
+    markets_dir = tmp_path / "markets"
+    markets_dir.mkdir()
+    (markets_dir / "closed.json").write_text(
+        json.dumps(
+            {
+                "city": "atlanta",
+                "date": "2026-05-03",
+                "paper_position": {
+                    "status": "closed",
+                    "market_id": "atl-closed",
+                    "pnl": -58.5,
+                    "cost": 58.5,
+                    "entry_price": 0.5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    account = PaperAccount(str(tmp_path))
+
+    assert account.get_state().locked_in_positions == 0.0

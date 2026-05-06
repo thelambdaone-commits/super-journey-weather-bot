@@ -27,7 +27,7 @@ def get_ecmwf(city_slug: str, dates: list[str]) -> Dict[str, float]:
     loc = get_by_slug(city_slug)
     temp_unit = "fahrenheit" if loc.unit == "F" else "celsius"
     result = {}
-    
+
     url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={loc.lat}&longitude={loc.lon}"
@@ -35,7 +35,7 @@ def get_ecmwf(city_slug: str, dates: list[str]) -> Dict[str, float]:
         f"&forecast_days=7&timezone={get_timezone(city_slug)}"
         f"&models=ecmwf_ifs025&bias_correction=true"
     )
-    
+
     for attempt in range(3):
         try:
             data = rate_limited_get(url, timeout=(5, 10), max_429_retries=0).json()
@@ -55,7 +55,7 @@ def get_gfs(city_slug: str, dates: list[str]) -> Dict[str, float]:
     """GFS seamless via Open-Meteo."""
     loc = get_by_slug(city_slug)
     temp_unit = "fahrenheit" if loc.unit == "F" else "celsius"
-    
+
     result = {}
     url = (
         f"https://api.open-meteo.com/v1/forecast"
@@ -64,7 +64,7 @@ def get_gfs(city_slug: str, dates: list[str]) -> Dict[str, float]:
         f"&forecast_days=7&timezone={get_timezone(city_slug)}"
         f"&models=gfs_seamless"
     )
-    
+
     for attempt in range(3):
         try:
             data = rate_limited_get(url, timeout=(5, 10), max_429_retries=0).json()
@@ -83,7 +83,7 @@ def get_hrrr(city_slug: str, dates: list[str]) -> Dict[str, float]:
     loc = get_by_slug(city_slug)
     if loc.region != "us":
         return {}
-    
+
     result = {}
     url = (
         f"https://api.open-meteo.com/v1/forecast"
@@ -92,7 +92,7 @@ def get_hrrr(city_slug: str, dates: list[str]) -> Dict[str, float]:
         f"&forecast_days=3&timezone={get_timezone(city_slug)}"
         f"&models=hrrr"
     )
-    
+
     for attempt in range(3):
         try:
             data = rate_limited_get(url, timeout=(5, 10), max_429_retries=0).json()
@@ -107,24 +107,32 @@ def get_hrrr(city_slug: str, dates: list[str]) -> Dict[str, float]:
 
 
 def get_dwd(city_slug: str, dates: list[str]) -> Dict[str, float]:
-    """DWD API - German Weather Service (EU only)."""
+    """DWD API - German Weather Service (EU only). Disabled by default."""
+    # Check if DWD is enabled in config
+    from ..weather.config import get_config
+    config = get_config()
+    if not getattr(config, "dwd_enabled", False):
+        return {}
+
     loc = get_by_slug(city_slug)
     if loc.region != "eu":
         return {}
-    
     result = {}
-    try:
-        url = f"https://dwd.api.bund.de/weather/forecast/wide/{loc.station}"
-        data = requests.get(url, timeout=(5, 10)).json()
-        if "error" not in str(data):
-            for date in dates:
-                for day in data.get("forecasts", []):
-                    if day.get("date") == date:
-                        temp = day.get("temperature")
-                        if temp is not None:
-                            result[date] = round(temp)
-    except (Exception,) as e:
-        logger.warning("DWD failed for %s: %s", city_slug, e)
+
+    url = f"https://dwd.api.bund.de/weather/forecast/wide/{loc.station}"
+    for attempt in range(3):
+        try:
+            data = rate_limited_get(url, timeout=(5, 10), max_429_retries=0).json()
+            if "error" not in data:
+                for item in data.get("forecasts", []):
+                    date = item.get("date", "")
+                    if date in dates:
+                        result[date] = item.get("temp_max", 0)
+                return result
+        except (Exception,) as e:
+            logger.warning("DWD failed for %s: %s", city_slug, e)
+            if attempt == 2:
+                raise WeatherAPIError(f"DWD failed: {e}") from e
     return result
 
 
@@ -133,7 +141,7 @@ def get_nws(city_slug: str, dates: list[str]) -> Dict[str, float]:
     loc = get_by_slug(city_slug)
     if loc.region != "us":
         return {}
-    
+
     result = {}
     try:
         url = f"https://api.weather.gov/points/{loc.lat},{loc.lon}"
@@ -244,7 +252,7 @@ def get_actual_temp(city_slug: str, date_str: str, station: str = "GENERIC") -> 
 
     except (Exception,) as e:
         logger.warning(f"Open-Meteo Archive failed for {city_slug}: {e}")
-    
+
     # 2) Meteostat fallback — gratuit/open-source.
     # Meteostat 2.x no longer exposes the legacy Daily class used here, so
     # disable this fallback quietly when the installed package lacks it.
@@ -322,7 +330,7 @@ def get_forecasts(city_slug: str, dates: list[str]) -> Dict[str, Dict]:
         dwd = results.get("dwd", {})
         nws = results.get("nws", {})
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    
+
     snapshots = {}
     for date in dates:
         snap = {
@@ -343,10 +351,10 @@ def get_forecasts(city_slug: str, dates: list[str]) -> Dict[str, Dict]:
             snap["optimal_confidence"] = optimal.confidence
             snap["optimal_weights"] = optimal.weights
             snap["optimal_primary_source"] = optimal.primary_source
-        
+
         # Find best forecast
         priority = get_forecast_priority(loc.region)
-        
+
         best = None
         best_source = None
         if optimal and len(optimal.weights) >= 2:
@@ -358,9 +366,9 @@ def get_forecasts(city_slug: str, dates: list[str]) -> Dict[str, Dict]:
                     best = snap[src]
                     best_source = src
                     break
-        
+
         snap["best"] = best
         snap["best_source"] = best_source
         snapshots[date] = snap
-    
+
     return snapshots
