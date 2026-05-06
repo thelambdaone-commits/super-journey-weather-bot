@@ -710,11 +710,15 @@ class MarketScanner:
 
             # Run Signal Quality Layer validation
             # Ensure confidence is at root level for Signal.from_dict()
+            outcome_range = outcome.get("range") or (None, None)
             signal = Signal.from_dict(city_slug, {
                 "market_id": outcome["market_id"],
                 "entry_price": market_price,
                 "ev": ev,
                 "p": prob_model,
+                "bucket_low": outcome_range[0],
+                "bucket_high": outcome_range[1],
+                "unit": loc.unit,
                 "confidence": candidate_features.get("confidence", 0.5),  # Root-level confidence
                 "spread": outcome.get("spread", 0.05),
                 "best_ask": outcome.get("ask", market_price),
@@ -827,8 +831,8 @@ class MarketScanner:
                     "calibrated_prob": round(item["prob_model"], 4),
                     "market_price": round(item["price_market"], 4),
                     "gross_roi": round(item["edge_brut"], 4),
-                    "net_roi": round(item["edge_net"], 4),
-                    "spread": round(item["spread"], 4),
+                    "net_roi": round(item.get("edge_net", item.get("edge_brut", 0.0)), 4),
+                    "spread": round(item.get("spread", 0.0), 4),
                     "volume": item.get("volume", 0),
                 }
                 with open(log_path, "a", encoding="utf-8") as f:
@@ -871,6 +875,7 @@ class MarketScanner:
             "question": outcome["question"],
             "bucket_low": outcome["range"][0],
             "bucket_high": outcome["range"][1],
+            "unit": outcome.get("unit", "C"),
             "entry_price": outcome["ask"],
             "bid_at_entry": outcome["bid"],
             "spread": outcome["spread"],

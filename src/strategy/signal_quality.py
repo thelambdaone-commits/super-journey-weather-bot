@@ -20,6 +20,15 @@ from ..alpha.fair_value import FairValueError, get_fair_value_engine
 logger = logging.getLogger(__name__)
 
 
+def _safe_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class Signal:
     market_id: str
@@ -36,6 +45,9 @@ class Signal:
     spread: float = 0.05
     question: str = ""
     features: Optional[dict] = None
+    bucket_low: float | None = None
+    bucket_high: float | None = None
+    unit: str = "C"
 
     @classmethod
     def from_dict(cls, city: str, signal_dict: dict) -> Signal:
@@ -66,6 +78,9 @@ class Signal:
             spread=float(signal_dict.get("spread", 0.05)),
             question=signal_dict.get("question", ""),
             features=signal_dict.get("features"),
+            bucket_low=_safe_float(signal_dict.get("bucket_low")),
+            bucket_high=_safe_float(signal_dict.get("bucket_high")),
+            unit=str(signal_dict.get("unit", signal_dict.get("features", {}).get("unit", "C")) or "C").upper(),
         )
 
 
@@ -132,6 +147,40 @@ class SignalQualityLayer:
             "reason": f"quality_{quality_score:.2f}" if quality_score < min_quality else "ok",
         }
 
+    @staticmethod
+    def _to_celsius(value: float, unit: str) -> float:
+        if unit.upper() == "F":
+            return (value - 32.0) * 5.0 / 9.0
+        return value
+
+    def _bucket_fair_value(self, signal: Signal, target_dt) -> float | None:
+        """Calculate fair probability for the traded temperature bucket."""
+        if signal.bucket_low is None or signal.bucket_high is None:
+            return None
+
+        low = signal.bucket_low
+        high = signal.bucket_high
+        unit = signal.unit or "C"
+
+        if low == -999:
+            threshold = self._to_celsius(high, unit)
+            return self.fair_value_engine.calculate_fair_value(signal.city, threshold, target_dt, side="BELOW")
+        if high == 999:
+            threshold = self._to_celsius(low, unit)
+            return self.fair_value_engine.calculate_fair_value(signal.city, threshold, target_dt, side="ABOVE")
+
+        lower = low - 0.5 if low == high else low
+        upper = high + 0.5 if low == high else high
+        lower_c = self._to_celsius(lower, unit)
+        upper_c = self._to_celsius(upper, unit)
+        prob_above_lower = self.fair_value_engine.calculate_fair_value(
+            signal.city, lower_c, target_dt, side="ABOVE"
+        )
+        prob_above_upper = self.fair_value_engine.calculate_fair_value(
+            signal.city, upper_c, target_dt, side="ABOVE"
+        )
+        return max(0.0, min(1.0, prob_above_lower - prob_above_upper))
+
     def compute_quality(self, signal: Signal) -> float:
         """
         Compute a comprehensive quality score (0.0 to 1.0).
@@ -170,7 +219,9 @@ class SignalQualityLayer:
                     days=1
                 )
 
-                fair_v = self.fair_value_engine.calculate_fair_value(signal.city, signal.price, target_dt)
+                fair_v = self._bucket_fair_value(signal, target_dt)
+                if fair_v is None:
+                    raise FairValueError("Missing bucket boundaries for fair-value alpha")
 
                 # PR #4: Calibration Gate (temporairement désactivé pour debug)
                 # if not self.fair_value_engine.check_calibration_gate(signal.city, "ensemble", fair_v - signal.vwap_ask):

@@ -397,6 +397,13 @@ def parse_temp_range(question: str) -> Optional[Tuple[float, float]]:
     return None
 
 
+def parse_temp_unit(question: str) -> str:
+    """Parse the temperature unit used by a market question."""
+    if re.search(r"[°]?F\b", question or "", re.IGNORECASE):
+        return "F"
+    return "C"
+
+
 def hours_to_resolution(end_date_str: str) -> float:
     """Calculate hours until resolution."""
     try:
@@ -444,6 +451,7 @@ def get_outcomes(event: Dict) -> List[Dict]:
                 "market_id": mid,
                 "token_id": yes_token_id,
                 "range": rng,
+                "unit": parse_temp_unit(question),
                 "yes_price": round(yes_price, 4),
                 "no_price": round(no_price, 4),
                 "ask": round(ask, 4),

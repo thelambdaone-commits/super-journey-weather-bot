@@ -69,11 +69,31 @@ class ScoringEngine:
 
     def score_row(self, row: DatasetRow) -> float:
         """Score a dataset row for backtesting and diagnostics."""
+        bucket_low = None
+        bucket_high = None
+        unit = "C"
+        if row.bucket:
+            raw_bucket = row.bucket.strip()
+            if raw_bucket.endswith(("C", "F")):
+                unit = raw_bucket[-1]
+                raw_bucket = raw_bucket[:-1]
+            parts = raw_bucket.split("-")
+            if len(parts) == 2:
+                try:
+                    bucket_low = float(parts[0])
+                    bucket_high = float(parts[1])
+                except (TypeError, ValueError):
+                    bucket_low = None
+                    bucket_high = None
+
         signal = {
             "market_id": row.market_id or "backtest",
             "ev": row.adjusted_ev if row.adjusted_ev is not None else row.raw_ev if row.raw_ev is not None else 0.0,
             "p": row.calibrated_prob if row.calibrated_prob is not None else row.market_implied_prob if row.market_implied_prob is not None else 0.0,
             "entry_price": row.market_price if row.market_price is not None else 0.5,
+            "bucket_low": bucket_low,
+            "bucket_high": bucket_high,
+            "unit": unit,
             "spread": row.spread if row.spread is not None else 0.05,
             "ml": {
                 "confidence": row.confidence or 0.5,

@@ -84,3 +84,22 @@ def test_stale_token_pruning_removes_expired_entries(tmp_path, monkeypatch):
     assert polymarket.prune_stale_tokens(now=now) == 1
     assert not polymarket.is_stale_token("old-token", now=now)
     assert polymarket.is_stale_token("fresh-token", now=now)
+
+
+def test_get_outcomes_preserves_temperature_unit():
+    event = {
+        "markets": [
+            {
+                "id": "m1",
+                "question": "Will the highest temperature in Chicago be 64°F or higher on May 8?",
+                "volume": "1000",
+                "outcomePrices": "[0.68, 0.32]",
+                "clobTokenIds": "[\"yes-token\", \"no-token\"]",
+            }
+        ]
+    }
+
+    outcomes = polymarket.get_outcomes(event)
+
+    assert outcomes[0]["range"] == (64.0, 999.0)
+    assert outcomes[0]["unit"] == "F"
